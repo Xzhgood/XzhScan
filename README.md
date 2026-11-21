@@ -27,7 +27,7 @@
 | 模块 | 能力 |
 |---|---|
 | **SQLScan** | XiaSQL 风格被动差分初筛（每个参数 5~7 个探针，只列候选不自动验证）<br>右键人工触发二阶段全模块验证（Mingdong-Pro SQLIScanner 移植，**payload 直接引用 xray 检测集**）<br>**ORDER BY 注入检测**：布尔报错型 + 时间盲注型双路径，逗号排序位子查询 payload，全参数发送不按参数名门槛<br>**命中即停**：时间快探 ≥850ms 立即停止枚举，同模板三级 `sleep(0)→S→S+1` 阶梯定罪；任一模块 CONFIRMED 即短路后续模块<br>差分候选页 XiaSQL 主从表 + 三色高亮（红=有变化 / 黄=待定 / 绿=拒绝）<br>漏洞结果页四态结论 + 四原生编辑器证据对比 + 一键发送 Repeater |
-| **AuthScan** | 三态重放越权检测（原始 / 低权限 / 无鉴权），请求头热更新实时生效<br>六编辑器对照可视化（原始、低权限、无鉴权 请求响应各一对）<br>静态资源过滤 + 授权域名白名单 + 应用成功弹窗摘要 |
+| **AuthScan** | 三态重放越权检测（原始 / 低权限 / 无鉴权），请求头热更新实时生效<br>**改进：静态资源不列入检测**——ico / js / css / 图片 / 字体 / 音视频 / 压缩包等 50+ 扩展名自动跳过，不对资源文件做三态重放，大幅降低噪声与无效请求<br>六编辑器对照可视化（原始、低权限、无鉴权 请求响应各一对）<br>授权域名白名单 + 追加扩展名 + 应用成功弹窗摘要 |
 | **Dictionary** | SQL 库名注入字典：5 类 DBMS × 5 种注入类型 = 25 细分类，含 URL 空格编码版<br>sqlmap 命令速查（按注入类型 / 出库名链路 / 鉴权 / WAF 绕过 / https 专项）<br>XSS 实战 payload 字典（含无危害验证组）<br>路径字典（Linux + Windows 双平台）<br>信息生成（姓名/手机号/身份证/信用代码/组织机构/银行卡，校验位算法生成）<br>弱口令字典生成（十关键字段模板组合 + top100） |
 | **U2C 中文查看** | 全局消息编辑器附加页签，一键解码 Unicode / 中文编码报文 |
 
@@ -101,6 +101,10 @@
 
 低权限认证头 / 待移除鉴权头 / 授权域名白名单 / 追加静态扩展名配置；应用后弹窗确认生效摘要，
 配置热更新实时生效（下一条流量即按新配置三态重放）。
+
+**改进点：静态资源不列入检测**——ico / js / css / 图片 / 字体 / 音视频 / 压缩包等
+50+ 扩展名默认不进入越权检测队列（支持追加自定义扩展名）。不对前端资源文件做三态重放，
+避免大量无意义的重复请求与误报噪声；过滤统计栏实时显示 ALLOW / REJECT / UNKNOWN 计数。
 
 ![AuthScan 设置](docs/images/authscan-settings.png)
 
@@ -230,6 +234,8 @@ ORDER BY 位不能接 AND/OR，需用**前导逗号 + 子查询**作为第二排
 - [smxiazi/xia_sql](https://github.com/smxiazi/xia_sql) —— XiaSQL 瞎注：被动差分检测思想与参数变异策略
 - [smxiazi/xia_Yue](https://github.com/smxiazi/xia_Yue) —— xia_Yue：越权检测三态重放思路
 - [smxiazi/xia_Liao](https://github.com/smxiazi/xia_Liao) —— 瞎料：信息生成与弱口令字典算法
+- [chaitin/xray](https://github.com/chaitin/xray) —— xray：二阶段时间盲注 / ORDER BY 注入检测集
+  （`XRAY_ORDER_PROBES` / `XRAY_NUMERIC_PROBES`）payload 来源
 - gatherBurp Perm —— 越权检测模块基础
 - Mingdong-Pro SQLIScanner —— 二阶段全模块验证序列
 - sqlmap —— SQL 库名注入语句与 sqlmap 命令口径
