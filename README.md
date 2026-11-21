@@ -49,6 +49,18 @@
 
 ![SQLScan 漏洞结果](docs/images/sqlscan-result.png)
 
+### SQLScan · 二阶段扫描落库
+
+每次右键人工验证的结论都**原样落库**，不做美化：
+
+- **CONFIRMED / Time-based blind (MySQL)** —— 命中时间盲注，注入类型、DB 家族、payload 全部记录；
+  同页 **REJECTED / None** 是验证未成立的参数，结论对比一目了然
+- **测试请求**编辑器展示实际发出的变异请求——图中 `name=111' and (select*from(select+sleep(3))a)/** union **/select+1)='`
+  即 xray 检测集的原生 payload，发出前经 AST 级构造校验，可直接发送 Repeater 复现
+- 每条结论绑定原始/测试 请求响应四份证据，溯源不靠记忆
+
+![SQLScan 二阶段扫描落库](docs/images/sqlscan-2stage-findings.png)
+
 ### SQLScan · 差分候选（XiaSQL 主从表）
 
 主表按请求聚合（URL 行三色高亮：红=有响应变化 / 黄=待定需人工复核 / 绿=拒绝），
