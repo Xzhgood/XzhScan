@@ -236,9 +236,6 @@ ORDER BY 位不能接 AND/OR，需用**前导逗号 + 子查询**作为第二排
 - [smxiazi/xia_Liao](https://github.com/smxiazi/xia_Liao) —— 瞎料：信息生成与弱口令字典算法
 - [chaitin/xray](https://github.com/chaitin/xray) —— xray：二阶段时间盲注 / ORDER BY 注入检测集
   （`XRAY_ORDER_PROBES` / `XRAY_NUMERIC_PROBES`）payload 来源
-- gatherBurp Perm —— 越权检测模块基础
-- Mingdong-Pro SQLIScanner —— 二阶段全模块验证序列
-- sqlmap —— SQL 库名注入语句与 sqlmap 命令口径
 
 ---
 
