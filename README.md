@@ -29,7 +29,7 @@
 | **SQLScan** | XiaSQL 风格被动差分初筛（每个参数 5~7 个探针，只列候选不自动验证）<br>右键人工触发二阶段全模块验证（Mingdong-Pro SQLIScanner 移植，**payload 直接引用 xray 检测集**）<br>**ORDER BY 注入检测**：布尔报错型 + 时间盲注型双路径，逗号排序位子查询 payload，全参数发送不按参数名门槛<br>**命中即停**：时间快探 ≥850ms 立即停止枚举，同模板三级 `sleep(0)→S→S+1` 阶梯定罪；任一模块 CONFIRMED 即短路后续模块<br>差分候选页 XiaSQL 主从表 + 三色高亮（红=有变化 / 黄=待定 / 绿=拒绝）<br>漏洞结果页四态结论 + 四原生编辑器证据对比 + 一键发送 Repeater |
 | **AuthScan** | 三态重放越权检测（原始 / 低权限 / 无鉴权），请求头热更新实时生效<br>**改进：静态资源不列入检测**——ico / js / css / 图片 / 字体 / 音视频 / 压缩包等 50+ 扩展名自动跳过，不对资源文件做三态重放，大幅降低噪声与无效请求<br>六编辑器对照可视化（原始、低权限、无鉴权 请求响应各一对）<br>授权域名白名单 + 追加扩展名 + 应用成功弹窗摘要 |
 | **Dictionary** | SQL 库名注入字典：5 类 DBMS × 5 种注入类型 = 25 细分类，含 URL 空格编码版<br>sqlmap 命令速查（按注入类型 / 出库名链路 / 鉴权 / WAF 绕过 / https 专项）<br>XSS 实战 payload 字典（含无危害验证组）<br>路径字典（Linux + Windows 双平台）<br>信息生成（姓名/手机号/身份证/信用代码/组织机构/银行卡，校验位算法生成）<br>弱口令字典生成（十关键字段模板组合 + top100） |
-| **U2C 中文查看** | 全局消息编辑器附加页签，一键解码 Unicode / 中文编码报文 |
+| **U2C 中文查看** | 迁移自 [gatherBurp](https://github.com/kN6jq/gatherBurp) 的全局能力：注册到 Burp 请求/响应编辑器附签（"U2C 中文"），不占 XzhScan 主界面<br>`\uXXXX` 多层 Unicode 转义还原 / JSON 识别美化 / 字符集轮换（UTF-8 · GBK · GB2312 · GB18030 · Big5 · UTF-16） |
 
 **设计原则**
 
@@ -219,6 +219,18 @@ ORDER BY 位不能接 AND/OR，需用**前导逗号 + 子查询**作为第二排
 - 暂停 = 完全离岗：不发包、不入库
 - 有界队列（200）+ 限速 + 单次超时预算（时间探针自动加大）
 
+### U2C 中文查看
+
+迁移自 [gatherBurp](https://github.com/kN6jq/gatherBurp)（U2CTab / CodecUtils，MIT 许可，来源声明见
+`vendor/NOTICE-GATHERBURP.md`），Montoya 化后去除了 fastjson / juniversalchardet 依赖：
+
+- **全局能力**：注册到 Burp 请求与响应编辑器（各一个 provider），每个原生编辑器出现
+  「U2C 中文」附签，不占 XzhScan 主界面页签
+- **Unicode 还原**：`\uXXXX` 多层转义还原，嵌套转义一次展开
+- **JSON 美化**：识别 JSON 并格式化（自研 MiniJson.prettyPrint）
+- **字符集轮换**：启发式探测（Content-Type charset → UTF-8 严格校验 → GBK），候选列表
+  UTF-8 / GBK / GB2312 / GB18030 / Big5 / UTF-16
+
 ### 配置与兼容
 
 - 配置持久化于 Burp extensionData，三级键回退（xzhscan → xzhsql → dualsql）
@@ -236,6 +248,7 @@ ORDER BY 位不能接 AND/OR，需用**前导逗号 + 子查询**作为第二排
 - [smxiazi/xia_Liao](https://github.com/smxiazi/xia_Liao) —— 瞎料：信息生成与弱口令字典算法
 - [chaitin/xray](https://github.com/chaitin/xray) —— xray：二阶段时间盲注 / ORDER BY 注入检测集
   （`XRAY_ORDER_PROBES` / `XRAY_NUMERIC_PROBES`）payload 来源
+- [kN6jq/gatherBurp](https://github.com/kN6jq/gatherBurp) —— U2C 中文查看页签（U2CTab / CodecUtils，MIT）来源
 
 ---
 
