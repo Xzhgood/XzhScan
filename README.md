@@ -110,7 +110,8 @@
 ## 安装
 
 1. Burp Suite ≥ 2023.10（Montoya API）。
-2. 下载 `build/XzhScan.jar` → `Extensions → Add → Extension Type: Java` 选择该 jar。
+2. 下载 [XzhScan.jar](https://github.com/Xzhgood/XzhScan/releases/latest/download/XzhScan.jar)
+   → `Extensions → Add → Extension Type: Java` 选择该 jar。
 3. 无需安装任何外部依赖（XiaSQL / Mingdong-Pro / sqlmap 均只作参考，无运行时依赖）。
 
 自行构建（JDK 17+）：
