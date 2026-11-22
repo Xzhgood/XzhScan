@@ -26,7 +26,7 @@
 
 | 模块 | 能力 |
 |---|---|
-| **SQLScan** | XiaSQL 风格被动差分初筛（每个参数 5~7 个探针，只列候选不自动验证）<br>右键人工触发二阶段全模块验证（Mingdong-Pro SQLIScanner 移植，**payload 直接引用 xray 检测集**）<br>**ORDER BY 注入检测**：布尔报错型 + 时间盲注型双路径，逗号排序位子查询 payload，全参数发送不按参数名门槛<br>**命中即停**：时间快探 ≥850ms 立即停止枚举，同模板三级 `sleep(0)→S→S+1` 阶梯定罪；任一模块 CONFIRMED 即短路后续模块<br>差分候选页 XiaSQL 主从表 + 三色高亮（红=有变化 / 黄=待定 / 绿=拒绝）<br>漏洞结果页四态结论 + 四原生编辑器证据对比 + 一键发送 Repeater |
+| **SQLScan** | XiaSQL 风格被动差分初筛（每个参数 5~7 个探针，只列候选不自动验证）<br>右键人工触发二阶段全模块验证（**payload 直接引用 xray 检测集**）<br>**ORDER BY 注入检测**：布尔报错型 + 时间盲注型双路径，逗号排序位子查询 payload，全参数发送不按参数名门槛<br>**命中即停**：时间快探 ≥850ms 立即停止枚举，同模板三级 `sleep(0)→S→S+1` 阶梯定罪；任一模块 CONFIRMED 即短路后续模块<br>差分候选页 XiaSQL 主从表 + 三色高亮（红=有变化 / 黄=待定 / 绿=拒绝）<br>漏洞结果页四态结论 + 四原生编辑器证据对比 + 一键发送 Repeater |
 | **AuthScan** | 三态重放越权检测（原始 / 低权限 / 无鉴权），请求头热更新实时生效<br>**改进：静态资源不列入检测**——ico / js / css / 图片 / 字体 / 音视频 / 压缩包等 50+ 扩展名自动跳过，不对资源文件做三态重放，大幅降低噪声与无效请求<br>六编辑器对照可视化（原始、低权限、无鉴权 请求响应各一对）<br>授权域名白名单 + 追加扩展名 + 应用成功弹窗摘要 |
 | **Dictionary** | SQL 库名注入字典：5 类 DBMS × 5 种注入类型 = 25 细分类，含 URL 空格编码版<br>sqlmap 命令速查（按注入类型 / 出库名链路 / 鉴权 / WAF 绕过 / https 专项）<br>XSS 实战 payload 字典（含无危害验证组）<br>路径字典（Linux + Windows 双平台）<br>信息生成（姓名/手机号/身份证/信用代码/组织机构/银行卡，校验位算法生成）<br>弱口令字典生成（十关键字段模板组合 + top100） |
 | **U2C 中文查看** | 迁移自 [gatherBurp](https://github.com/kN6jq/gatherBurp) 的全局能力：注册到 Burp 请求/响应编辑器附签（"U2C 中文"），不占 XzhScan 主界面<br>`\uXXXX` 多层 Unicode 转义还原 / JSON 识别美化 / 字符集轮换（UTF-8 · GBK · GB2312 · GB18030 · Big5 · UTF-16） |
@@ -143,7 +143,7 @@
 1. Burp Suite ≥ 2023.10（Montoya API）。
 2. 下载 [XzhScan.jar](https://github.com/Xzhgood/XzhScan/releases/latest/download/XzhScan.jar)
    → `Extensions → Add → Extension Type: Java` 选择该 jar。
-3. 无需安装任何外部依赖（XiaSQL / Mingdong-Pro / sqlmap 均只作参考，无运行时依赖）。
+3. 无需安装任何外部依赖（XiaSQL / sqlmap 等均只作参考，无运行时依赖）。
 
 自行构建（JDK 17+）：
 
@@ -186,8 +186,8 @@ bash build.sh    # Git Bash（推荐）
 
 ### SQLScan 二阶段全模块序列
 
-右键人工验证时按 Mingdong-Pro SQLIScanner 原版顺序执行，**时间枚举 payload 直接引用 xray
-检测集**（`XRAY_ORDER_PROBES` / `XRAY_NUMERIC_PROBES`，与 Mingdong-Pro v12 字节码逐条对齐）；
+右键人工验证时按固定模块顺序执行，**时间枚举 payload 直接引用 xray
+检测集**（`XRAY_ORDER_PROBES` / `XRAY_NUMERIC_PROBES`，逐条对齐原版检测集）；
 **任一模块 CONFIRMED 即短路**后续模块，时间枚举**命中即停**：
 
 1. `heuristic` —— 引号噪声探测（弱指纹降级 SUSPECTED）
