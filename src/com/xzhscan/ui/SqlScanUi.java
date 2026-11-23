@@ -1624,6 +1624,9 @@ public final class SqlScanUi {
             });
             JCheckBox cJsonStrict = new JCheckBox("JSON 严格校验（变异失败禁止发送）", config.jsonStrictValidation);
             JCheckBox cTimeProbe = new JCheckBox("允许时间盲注探针·第二阶段（sleep 复验）", config.allowTimeBasedProbe);
+            // v3.9.7：时间盲注延迟秒数（默认 5；2-3 秒会被系统卡顿误判）
+            SpinnerNumberModel spDelay = new SpinnerNumberModel(
+                    Math.max(2, Math.min(10, config.timeDelaySeconds)), 2, 10, 1);
             // v3.5：第一阶段时间探针/stacked/Oracle 三开关已随被动时间子系统移除
             // （时间盲注走右键人工触发的 Phase2 全模块序列，见 cTimeProbe 一项）。
             JCheckBox cDenyWrite = new JCheckBox("写语义接口默认拒绝", config.denyWriteLookingEndpoints);
@@ -1654,6 +1657,7 @@ public final class SqlScanUi {
             addPair(p, g, row++, "差分通过分数（%）：", new JSpinner(spScore));
             addPair(p, g, row++, "请求间隔（ms）：", new JSpinner(spRate));
             addPair(p, g, row++, "请求超时（ms）：", new JSpinner(spTimeout));
+            addPair(p, g, row++, "时间盲注延迟（秒，默认5）：", new JSpinner(spDelay));
             addPair(p, g, row++, "去重窗口（分钟，0=不去重）：", new JSpinner(spDedup));
             addPair(p, g, row++, "域名白名单（逗号分隔，空=全部）：", tfWhite);
             addPair(p, g, row++, "URL 黑名单（逗号分隔）：", tfBlack);
@@ -1675,6 +1679,7 @@ public final class SqlScanUi {
                 config.minDifferenceScore = spScore.getNumber().intValue() / 100.0;
                 config.requestIntervalMs = spRate.getNumber().intValue();
                 config.requestTimeoutMs = spTimeout.getNumber().intValue();
+                config.timeDelaySeconds = spDelay.getNumber().intValue();
                 config.dedupWindowMinutes = spDedup.getNumber().intValue();
                 config.domainWhitelist = tfWhite.getText().trim();
                 config.urlBlacklist = tfBlack.getText().trim();
@@ -1693,7 +1698,8 @@ public final class SqlScanUi {
                                     + "  Intruder=" + config.watchIntruder + "\n"
                                     + "线程=" + config.maxConcurrentScans
                                     + "  请求间隔=" + config.requestIntervalMs + "ms\n"
-                                    + "去重窗口=" + config.dedupWindowMinutes + " 分钟",
+                                    + "时间盲注延迟=" + config.timeDelaySeconds + "s"
+                                    + "  去重窗口=" + config.dedupWindowMinutes + " 分钟",
                             "XzhScan", javax.swing.JOptionPane.INFORMATION_MESSAGE);
                 } catch (Throwable ignored) {
                     // 无头环境（自动化测试）弹窗失败不影响设置写入

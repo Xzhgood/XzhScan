@@ -15,7 +15,7 @@ public final class ConfigCodec {
     private static final String ESC_NL = String.valueOf((char) 92) + 'n';
 
     /** 当前配置格式版本（与插件 VERSION 同步维护）。 */
-    public static final String CONFIG_VERSION = "3.9.3";
+    public static final String CONFIG_VERSION = "3.9.7";
 
     /**
      * 历史迁移记录（说明性质，供加载日志与审计）：
@@ -55,6 +55,7 @@ public final class ConfigCodec {
         m.put("watchIntruder", String.valueOf(c.watchIntruder));
         m.put("jsonStrictValidation", String.valueOf(c.jsonStrictValidation));
         m.put("allowTimeBasedProbe", String.valueOf(c.allowTimeBasedProbe));
+        m.put("timeDelaySeconds", String.valueOf(c.timeDelaySeconds));
         m.put("denyWriteLookingEndpoints", String.valueOf(c.denyWriteLookingEndpoints));
         m.put("baselineSamples", String.valueOf(c.baselineSamples));
         m.put("maxConcurrentScans", String.valueOf(c.maxConcurrentScans));
@@ -105,6 +106,7 @@ public final class ConfigCodec {
                 case "watchIntruder" -> c.watchIntruder = Boolean.parseBoolean(v);
                 case "jsonStrictValidation" -> c.jsonStrictValidation = Boolean.parseBoolean(v);
                 case "allowTimeBasedProbe" -> c.allowTimeBasedProbe = Boolean.parseBoolean(v);
+                case "timeDelaySeconds" -> c.timeDelaySeconds = parseInt(v, c.timeDelaySeconds, 2, 10);
                 case "denyWriteLookingEndpoints" -> c.denyWriteLookingEndpoints = Boolean.parseBoolean(v);
                 case "baselineSamples" -> c.baselineSamples = parseInt(v, c.baselineSamples, 2, 6);
                 case "maxConcurrentScans" -> c.maxConcurrentScans = parseInt(v, c.maxConcurrentScans, 1, 8);

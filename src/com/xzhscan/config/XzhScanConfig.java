@@ -58,8 +58,15 @@ public final class XzhScanConfig {
     // ---------------- 第二阶段 ----------------
     /** 二次验证时是否允许时间盲注探针（sleep 类）。 */
     public boolean allowTimeBasedProbe = true;
-    /** 每个候选验证的最长耗时（ms）。 */
-    public long verifyTimeoutMs = 120_000;
+    /**
+     * 时间盲注延迟秒数（v3.9.7，默认 5）。原版按基线速度浮动 2/3 秒，
+     * 实测 2-3 秒在负载抖动/系统卡顿时会被误判为命中；5 秒把信号抬到
+     * 抖动带之外，三级阶梯相对差分的判定下限同步放大到 S×750ms。
+     * 取值 2-10；调低会明显增加误报，调高会显著变慢。
+     */
+    public int timeDelaySeconds = 5;
+    /** 每个候选验证的最长耗时（ms）。S=5 时快探全量约 130s + 三级阶梯 11s，默认放到 300s。 */
+    public long verifyTimeoutMs = 300_000;
     public boolean reportWafBlocked = true;
 
     // ---------------- 安全策略 ----------------
@@ -113,6 +120,7 @@ public final class XzhScanConfig {
         c.weightDbError = weightDbError;
         c.weightContentDiff = weightContentDiff;
         c.allowTimeBasedProbe = allowTimeBasedProbe;
+        c.timeDelaySeconds = timeDelaySeconds;
         c.verifyTimeoutMs = verifyTimeoutMs;
         c.reportWafBlocked = reportWafBlocked;
         c.domainWhitelist = domainWhitelist;

@@ -38,7 +38,7 @@ public final class Test24TimeProbeBudget {
         return new Transport() {
             @Override
             public RawResponse send(RawRequest r) {
-                return send(r, 20_000L); // 默认预算 = requestTimeoutMs（旧缺陷形态）
+                return send(r, 60_000L); // 默认预算 = requestTimeoutMs（旧缺陷形态）
             }
 
             @Override
@@ -111,17 +111,17 @@ public final class Test24TimeProbeBudget {
         Transport tiered = new Transport() {
             @Override
             public RawResponse send(RawRequest r) {
-                return send(r, 20_000L);
+                return send(r, 60_000L);
             }
 
             @Override
             public RawResponse send(RawRequest r, long timeoutMs) {
                 String u = r.url.toLowerCase();
                 long delay = 25L;
-                if (u.contains("pg_sleep(2)")) {
-                    delay = 14_000L; // S=2 × 7 行
-                } else if (u.contains("pg_sleep(3)")) {
-                    delay = 21_000L; // S+1=3 × 7 行
+                if (u.contains("pg_sleep(5)")) {
+                    delay = 35_000L; // S=5 × 7 行
+                } else if (u.contains("pg_sleep(6)")) {
+                    delay = 42_000L; // S+1=6 × 7 行
                 }
                 if (delay > timeoutMs) {
                     return new RawResponse(0, new LinkedHashMap<>(), new byte[0], timeoutMs);

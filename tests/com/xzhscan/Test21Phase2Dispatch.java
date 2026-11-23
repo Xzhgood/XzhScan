@@ -72,11 +72,11 @@ public final class Test21Phase2Dispatch {
             if (u.contains("pg_sleep(0)")) {
                 return resp(200, "{\"ok\":true}", 30);
             }
-            if (u.contains("pg_sleep(2)")) {
-                return resp(200, "{\"ok\":true}", 2600);
+            if (u.contains("pg_sleep(5)")) {
+                return resp(200, "{\"ok\":true}", 6000);
             }
-            if (u.contains("pg_sleep(3)")) {
-                return resp(200, "{\"ok\":true}", 3600);
+            if (u.contains("pg_sleep(6)")) {
+                return resp(200, "{\"ok\":true}", 7200);
             }
             return resp(200, "{\"ok\":true}", 30); // 基线
         };
@@ -103,10 +103,10 @@ public final class Test21Phase2Dispatch {
         Support.FakeTransport jitter = new Support.FakeTransport();
         jitter.responder = (r, i) -> {
             String u = r.url.toLowerCase();
-            if (u.contains("pg_sleep(2)")) {
+            if (u.contains("pg_sleep(5)")) {
                 return resp(200, "{\"ok\":true}", 800);
             }
-            if (u.contains("pg_sleep(3)")) {
+            if (u.contains("pg_sleep(6)")) {
                 return resp(200, "{\"ok\":true}", 900);
             }
             return resp(200, "{\"ok\":true}", 30);

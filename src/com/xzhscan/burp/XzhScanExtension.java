@@ -20,7 +20,7 @@ import com.xzhscan.ui.SqlScanUi;
  */
 public final class XzhScanExtension implements BurpExtension {
 
-    public static final String VERSION = "3.9.6";
+    public static final String VERSION = "3.9.7";
 
     private static final String NL = String.valueOf((char) 10);
 

@@ -141,18 +141,21 @@ public final class Test31Dictionary {
         // 源码级转义守卫：\\u 不应被编译成真实 unicode（条目必须仍含反斜杠原文）
         t.check(allXss.contains("confir\\u006d"), "xss: confir\\u006d raw text preserved");
 
-        // ---------- 4. 路径字典（v3.7.1：Linux 三组 + Windows 三组） ----------
-        t.check(splitCount(PathDict.LINUX_PATH) > 100, "linux paths >100");
-        t.check(splitCount(PathDict.LINUX_CONFIG) > 80, "linux configs >80");
-        t.check(splitCount(PathDict.LINUX_LOG) > 50, "linux logs >50");
-        t.check(splitCount(PathDict.WINDOWS_PATH) > 40, "windows paths >40");
-        t.check(splitCount(PathDict.WINDOWS_CONFIG) > 30, "windows configs >30");
-        t.check(splitCount(PathDict.WINDOWS_LOG) > 30, "windows logs >30");
-        t.check(PathDict.LINUX_PATH.contains("/etc/passwd"), "linux path content sanity");
-        t.check(PathDict.WINDOWS_PATH.contains("C:\\Windows\\System32\\config\\SAM"),
-                "windows path content sanity (SAM)");
-        t.check(PathDict.WINDOWS_CONFIG.contains("web.config"), "windows config content sanity");
-        t.check(PathDict.WINDOWS_LOG.contains("winevt"), "windows log content sanity (evtx)");
+        // ---------- 4. 路径字典（v3.9.7：原版文件读取扫描器 payload 全量 45 条） ----------
+        t.checkEq(23, splitCount(PathDict.LINUX_PASSWD), "linux /etc/passwd payload = 23");
+        t.checkEq(11, splitCount(PathDict.WINDOWS_WINI), "windows win.ini payload = 11");
+        t.checkEq(10, splitCount(PathDict.JAVA_WEB_XML), "java WEB-INF payload = 10");
+        t.checkEq(1, splitCount(PathDict.SPECIAL), "special payload = 1");
+        t.check(PathDict.LINUX_PASSWD.contains("/etc/passwd"), "linux content sanity");
+        t.check(PathDict.LINUX_PASSWD.contains("....//"), "linux bypass sanity (....//)");
+        t.check(PathDict.LINUX_PASSWD.contains("%252f"), "linux bypass sanity (double-encode)");
+        t.check(PathDict.LINUX_PASSWD.contains("..;/"), "linux bypass sanity (..;/)");
+        t.check(PathDict.LINUX_PASSWD.contains("%u2215"), "linux bypass sanity (%uXXXX)");
+        t.check(PathDict.WINDOWS_WINI.contains("win.ini"), "windows content sanity");
+        t.check(PathDict.WINDOWS_WINI.contains("%5c"), "windows bypass sanity (%5c)");
+        t.check(PathDict.WINDOWS_WINI.contains("%u2216"), "windows bypass sanity (%u2216)");
+        t.check(PathDict.JAVA_WEB_XML.contains("WEB-INF/web.xml"), "java web xml sanity");
+        t.check(PathDict.SPECIAL.contains("http:/"), "special http:/ sanity");
 
         // ---------- 5. 生成器资产 ----------
         t.check(GeneratorAssets.ID_AREA_CODES.length > 3000,

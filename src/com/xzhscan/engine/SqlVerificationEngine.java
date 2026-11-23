@@ -212,7 +212,9 @@ public final class SqlVerificationEngine {
         double mean = timings.stream().mapToLong(Long::longValue).average().orElse(0);
         double std = Math.sqrt(timings.stream().mapToDouble(x -> (x - mean) * (x - mean)).average().orElse(0));
         long timeThreshold = (long) (mean + 3.0 * Math.max(std, 30.0) + 1500.0);
-        int sleepSeconds = mean < 800 ? 2 : 3;
+        // v3.9.7：延迟秒数改用配置值（默认 5）。原版按基线浮动 2/3 秒——实测
+        // 2-3 秒落在系统卡顿/负载抖动的抖动带内，是时间盲注误报的主要来源。
+        int sleepSeconds = Math.max(2, Math.min(10, config.timeDelaySeconds));
 
         // 基线内容稳定性（任务书 §12.4）：两两相似度 >= 0.98 视为稳定
         boolean baselineStable = baselineBodies.size() >= 2;
@@ -799,9 +801,14 @@ public final class SqlVerificationEngine {
         int quickCount = probes.size();
         for (int i = 0; i < quickCount; i++) {
             QuickProbeSpec p = probes.get(i);
-            if (!p.template.contains("+")) {
-                // 原版同族变体：空格/加号被过滤时用注释符顶替（连发，属原版行为）
-                probes.add(new QuickProbeSpec(p.template.replace("+", "/**/"), p.db, p.replace));
+            // v3.9.7 修复：原版变体是 template.replace(" ", "/**/")（替换**空格**）；
+            // 此前误写成替换 "+"，而 QUICK 模板全是空格形态 → 变体一条都没生成。
+            String spaced = p.template.replace(" ", "/**/");
+            String variant = spaced.equals(p.template)
+                    ? p.template.replace("+", "/**/")   // 兼容 '+' 代表空格的模板形态
+                    : spaced;
+            if (!variant.equals(p.template)) {
+                probes.add(new QuickProbeSpec(variant, p.db, p.replace));
             }
         }
         // v3.8.2 增强（有意偏离原版）：原版仅参数名命中 ORDER_NAMES 才发 ORDER 探针，
@@ -835,8 +842,16 @@ public final class SqlVerificationEngine {
             if (SqlWafDetector.blockedVsBaseline(toSimple(r), waf.baseline) != null) {
                 continue;
             }
-            if (r.elapsedMs < 850L) {
-                continue; // 原版命中下限 850ms
+            // 原版语义：响应被判为"被丢弃/空响应"时同样不可作为延迟证据
+            if (SqlWafDetector.droppedVsBaseline(toSimple(r), waf.baseline != null)) {
+                continue;
+            }
+            // v3.9.7 关键修复：对齐原版命中门槛 mean + S*850ms（原先只用固定 850ms）。
+            // 示例：基线 200ms、S=5 → 需 ≥ 4450ms 才算命中；此前 850ms 即命中，
+            // 慢查询/卡顿轻松过线，是时间盲注误报的主要来源。
+            long hitFloor = (long) mean + (long) sleepSeconds * 850L;
+            if (r.elapsedMs < hitFloor) {
+                continue;
             }
             Optional<InjectionFinding> f = threeTierTemplate(p.template, p.db, p.replace,
                     "time-quick:" + p.db, base, target, waf, url, mean, std, sleepSeconds, result, null);

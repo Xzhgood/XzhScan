@@ -65,10 +65,10 @@ public final class Test26ManualVerify {
         tiered.responder = (r, i) -> {
             String u = r.url.toUpperCase();
             long ms = 30;
-            if (u.contains("SLEEP(2)")) {
-                ms = 2400;
-            } else if (u.contains("SLEEP(3)")) {
-                ms = 3600;
+            if (u.contains("SLEEP(5)")) {
+                ms = 6000;
+            } else if (u.contains("SLEEP(6)")) {
+                ms = 7200;
             }
             return new com.xzhscan.model.RawHttp.RawResponse(200, new java.util.LinkedHashMap<>(),
                     "ok".getBytes(java.nio.charset.StandardCharsets.UTF_8), ms);

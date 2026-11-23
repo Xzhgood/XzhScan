@@ -75,10 +75,10 @@ public final class Test27ManualFullScan {
         timeOracle.responder = (r, i) -> {
             String u = ParameterExtractor.urlDecode(r.url).toLowerCase();
             long ms = 25;
-            if (u.contains("11 and sleep(2)")) {
-                ms = 2400; // NUMERIC 集首个家族（mysql-sleep-02）三级 S=2
-            } else if (u.contains("11 and sleep(3)")) {
-                ms = 3600;
+            if (u.contains("11 and sleep(5)")) {
+                ms = 6000; // NUMERIC 集首个家族三级 S=5
+            } else if (u.contains("11 and sleep(6)")) {
+                ms = 7200;
             }
             return resp(200, "{\"ok\":true}", ms);
         };

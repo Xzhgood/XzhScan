@@ -42,7 +42,7 @@ import java.util.Map;
  *  - SQL库名注入：五类 DBMS 出库名语句（sqlmap queries.xml 形态；盲注仅布尔差分）；
  *  - sqlmap命令：按注入类型/鉴权/绕过/https 的命令模板；
  *  - XSS字典：实战 payload（分组 + 原始备注）；
- *  - 路径字典：Linux/Windows 敏感路径、配置、日志三组各备；
+ *  - 路径字典：文件读取/路径穿越 payload（原版扫描器全量 45 条，四类目标文件）；
  *  - 信息生成：随机姓名/手机号/身份证/信用代码/组织机构代码/银行卡；
  *  - 字典生成：十关键字段弱口令组合字典 + top100。
  *
@@ -73,26 +73,20 @@ public final class DictionaryUi {
 
     // ================= 通用字典面板 =================
 
-    /** 路径/配置/日志 → 条目（按平台分类：Linux 三组 + Windows 三组）。 */
+    /** 文件读取/路径穿越 payload → 条目（原版文件读取扫描器四组，共 45 条）。 */
     private static List<DictEntry> pathEntries() {
         List<DictEntry> out = new ArrayList<>();
-        for (String s : splitDict(PathDict.LINUX_PATH)) {
-            out.add(new DictEntry("Linux·敏感路径", s, s, "Linux 敏感路径字典"));
+        for (String s : splitDict(PathDict.LINUX_PASSWD)) {
+            out.add(new DictEntry("Linux·文件读取", s, s, "任意文件读取 /etc/passwd（含 ../、%2e%2e、%252f、%uXXXX 等绕过）"));
         }
-        for (String s : splitDict(PathDict.LINUX_CONFIG)) {
-            out.add(new DictEntry("Linux·配置路径", s, s, "Linux 配置文件字典"));
+        for (String s : splitDict(PathDict.WINDOWS_WINI)) {
+            out.add(new DictEntry("Windows·文件读取", s, s, "任意文件读取 Windows/win.ini（含反斜杠、%5c、%u2216 等绕过）"));
         }
-        for (String s : splitDict(PathDict.LINUX_LOG)) {
-            out.add(new DictEntry("Linux·日志路径", s, s, "Linux 日志文件字典"));
+        for (String s : splitDict(PathDict.JAVA_WEB_XML)) {
+            out.add(new DictEntry("Java Web·配置读取", s, s, "WEB-INF/web.xml 读取（Java 应用信息泄露）"));
         }
-        for (String s : splitDict(PathDict.WINDOWS_PATH)) {
-            out.add(new DictEntry("Windows·敏感路径", s, s, "Windows 敏感路径字典（SAM/桌面/web 目录等）"));
-        }
-        for (String s : splitDict(PathDict.WINDOWS_CONFIG)) {
-            out.add(new DictEntry("Windows·配置路径", s, s, "IIS/Apache/Nginx/Tomcat/MySQL/PHP 配置"));
-        }
-        for (String s : splitDict(PathDict.WINDOWS_LOG)) {
-            out.add(new DictEntry("Windows·日志路径", s, s, "IIS/Apache/Nginx/Tomcat/MySQL/Windows 事件日志"));
+        for (String s : splitDict(PathDict.SPECIAL)) {
+            out.add(new DictEntry("特殊·路径穿越", s, s, "http:/ 前缀特殊穿越形态"));
         }
         return out;
     }

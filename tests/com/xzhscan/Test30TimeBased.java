@@ -46,7 +46,7 @@ public final class Test30TimeBased {
             Matcher m = SLEEP_NUM.matcher(u);
             if (u.contains("admin' and sleep(") && m.find()) {
                 int sec = Integer.parseInt(m.group(1));
-                long ms = sec == 0 ? 30 : (belowFloorMs > 0 && sec == 2 ? belowFloorMs : sec * 1200L);
+                long ms = sec == 0 ? 30 : (belowFloorMs > 0 && sec == 5 ? belowFloorMs : sec * 1200L);
                 return resp(200, "{\"ok\":true}", ms);
             }
             return resp(200, "{\"ok\":true}", 25);
@@ -67,10 +67,10 @@ public final class Test30TimeBased {
         config.baselineSamples = 2;
         config.allowTimeBasedProbe = true;
 
-        // ---------- 1. QUICK 快探 2400ms(≥850) → 同模板三级 → CONFIRMED ----------
+        // ---------- 1. QUICK 快探 6000ms(≥ mean+5×850) → 同模板三级 → CONFIRMED ----------
         Support.FakeTransport hit = mysqlQuick(0);
         var vr = new SqlVerificationEngine(config, hit, new EvidenceStore()).verify(candidate());
-        t.checkEq(VerifyVerdict.CONFIRMED, vr.verdict, "quick probe >=850ms -> 3-tier -> CONFIRMED");
+        t.checkEq(VerifyVerdict.CONFIRMED, vr.verdict, "quick probe >= mean+S*850 -> 3-tier -> CONFIRMED");
         t.checkEq(TimingVerdict.TIMING_CONFIRMED, vr.timingVerdict, "timing verdict CONFIRMED");
         t.check(!vr.findings.isEmpty() && vr.findings.get(0).payloadRuleId != null
                         && vr.findings.get(0).payloadRuleId.startsWith("time-quick:"),
@@ -81,17 +81,17 @@ public final class Test30TimeBased {
                 r.url.contains("DBMS_PIPE") || r.url.toLowerCase().contains("pg_sleep")
                         || r.url.toUpperCase().contains("WAITFOR"));
         t.check(!otherFamilies, "enumeration stops after first quick hit (no other DBMS families)");
-        // 三级使用同一模板：S=2（基线快）→ sleep(0)/sleep(2)/sleep(3)
+        // 三级使用同一模板：S=5（默认）→ sleep(0)/sleep(5)/sleep(6)
         long tiers = hit.sent.stream().filter(r -> {
             String u = ParameterExtractor.urlDecode(r.url).toLowerCase();
             return u.contains("admin' and sleep(");
         }).count();
         t.check(tiers >= 4, "quick probe + 3 tiers sent: " + tiers);
 
-        // ---------- 2. 800ms 低于原版 850ms 下限 → 不算命中 ----------
+        // ---------- 2. 800ms 低于 mean+S*850 门槛 → 不算命中 ----------
         Support.FakeTransport slow = mysqlQuick(800);
         var vr2 = new SqlVerificationEngine(config, slow, new EvidenceStore()).verify(candidate());
-        t.check(vr2.verdict != VerifyVerdict.CONFIRMED, "800ms below 850ms floor -> not confirmed");
+        t.check(vr2.verdict != VerifyVerdict.CONFIRMED, "800ms below mean+S*850 floor -> not confirmed");
         t.check(vr2.timingVerdict != TimingVerdict.TIMING_CONFIRMED, "no TIMING_CONFIRMED at 800ms");
 
         // ---------- 3. '+' 变体存在（原版同族连发）：模板含 '+' 的快探应有替身 ----------
@@ -116,11 +116,11 @@ public final class Test30TimeBased {
                 if (u.contains("sleep(0)") || u.contains("pg_sleep(0)")) {
                     return resp(200, "{\"ok\":true}", 30);
                 }
-                if (u.contains("sleep(2)") || u.contains("pg_sleep(2)")) {
-                    return resp(200, "{\"ok\":true}", 2400);
+                if (u.contains("sleep(5)") || u.contains("pg_sleep(5)")) {
+                    return resp(200, "{\"ok\":true}", 6000);
                 }
-                if (u.contains("sleep(3)") || u.contains("pg_sleep(3)")) {
-                    return resp(200, "{\"ok\":true}", 3600);
+                if (u.contains("sleep(6)") || u.contains("pg_sleep(6)")) {
+                    return resp(200, "{\"ok\":true}", 7200);
                 }
                 return resp(200, "{\"ok\":true}", 30);
             }
