@@ -20,7 +20,7 @@ import com.xzhscan.ui.SqlScanUi;
  */
 public final class XzhScanExtension implements BurpExtension {
 
-    public static final String VERSION = "3.9.7";
+    public static final String VERSION = "4.0.0";
 
     private static final String NL = String.valueOf((char) 10);
 
@@ -123,6 +123,8 @@ public final class XzhScanExtension implements BurpExtension {
                 // v3.9.3 修复：应用设置立即持久化（此前只改内存，扩展重载后回滚——
                 // watchIntruder 等开关"勾了又丢"的根因）
                 ui.onApplyConfig(() -> saveConfig(apiRef, config));
+                // v4.0：任何配置字段变更立即落盘（单一真相源——不再依赖"卸载时才存"）
+                config.addListener(() -> saveConfig(apiRef, config));
 
                 // AuthScan 页签（module 为同步段 final 引用，必然非 null）
                 mainPanel.attachModuleTab("AuthScan",

@@ -183,8 +183,13 @@ public final class PayloadRegistry {
         // v3.8.3：SQLite RANDOMBLOB 大计算探针整体删除（用户决策——资源消耗不可控，
         // SQLite 场景改由字典页手动 Repeater；TIME_PROBES 资产表同步删除两条 SQLite）。
         List<TimeProbe> qt = SqlPayloadLibrary.QUICK_TIME_PROBES;
-        RuleStatus[] qtStatus = {RuleStatus.KEEP, RuleStatus.KEEP, RuleStatus.KEEP, RuleStatus.KEEP,
-                RuleStatus.KEEP, RuleStatus.KEEP, RuleStatus.CONDITIONAL, RuleStatus.CONDITIONAL};
+        // v4.0：状态按模板特征动态生成（含 ';' 的堆叠形态=CONDITIONAL，其余 KEEP）。
+        // 此前是硬编码 8 元素数组——新增探针即越界，属于典型的"数据与代码耦合"脆点。
+        RuleStatus[] qtStatus = new RuleStatus[qt.size()];
+        for (int i = 0; i < qt.size(); i++) {
+            qtStatus[i] = qt.get(i).template().contains(";")
+                    ? RuleStatus.CONDITIONAL : RuleStatus.KEEP;
+        }
         for (int i = 0; i < qt.size(); i++) {
             TimeProbe p = qt.get(i);
             String ctx = p.ctx() == SqlPayloadLibrary.Ctx.NUMERIC ? "NUMERIC" : "STRING";
@@ -336,7 +341,12 @@ public final class PayloadRegistry {
             case 5 -> "QT-PG-PGSLEEP-02";
             case 6 -> "QT-ORA-PIPE-01";
             case 7 -> "QT-ORA-PIPE-02";
-            default -> "QT-SQLITE-RBLOB-01";
+            // v4.0：sqlmap query-SLEEP 形态（追加在原 8 条之后，保持旧 ID 不变）
+            case 8 -> "QT-MYSQL-QSLEEP-01";
+            case 9 -> "QT-MYSQL-QSLEEP-02";
+            // 兜底不再复用已删除规则的 ID（此前 default 返回 QT-SQLITE-RBLOB-01，
+            // 新增探针即与历史 ID 冲突 → 唯一性断言失败）
+            default -> "QT-EXTRA-" + (i + 1);
         };
     }
 

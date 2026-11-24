@@ -271,6 +271,13 @@ public final class SqlVerificationEngine {
                         sleepSeconds, result, hint);
                 f = isConfirmed(f2) ? f2 : (f.isPresent() ? f : f2);
             }
+            if (!isConfirmed(f) && budgetLeft() && config.allowTimeBasedProbe) {
+                // v4.0：sqlmap 注入模型（boundary + clause 解耦 + 条件对）——
+                // 覆盖旧 payload 集够不着的注入上下文（数字型/嵌套引号/双层括号/补全闭合）
+                Optional<InjectionFinding> f2 = verifySqlmapTime(base, target, waf, url, mean, std,
+                        sleepSeconds, result, hint);
+                f = isConfirmed(f2) ? f2 : (f.isPresent() ? f : f2);
+            }
         } else switch (candidate.candidateType) {
             case ERROR_CANDIDATE -> {
                 // 错误型模块：heuristic（引号噪声，含原值）+ errConfirm（md5 回显）+ 裸表达式
@@ -866,6 +873,173 @@ public final class SqlVerificationEngine {
             result.timingVerdict = TimingVerdict.TIMING_INCONCLUSIVE;
         }
         return retained;
+    }
+
+    /**
+     * v4.0：sqlmap 注入模型时间盲注（boundary 与 clause 解耦）。
+     *
+     * <p>两阶段，均复用 {@link #threeTierTemplate} 做三级阶梯定罪与证据构造：</p>
+     * <ol>
+     *   <li><b>条件对</b>（最强证据）：同一 boundary 下发 TRUE 延迟子句与 FALSE 不延迟子句，
+     *       差值 ≥ S×750ms 且 FALSE 接近基线，才进入三级阶梯——单模板内建对照，
+     *       等效 sqlmap 的 {@code SLEEP(S-(IF(INFERENCE,0,S)))} 思想；</li>
+     *   <li><b>boundary 枚举</b>：按参数类型排序的 boundary（数字型 / 单引号 / 嵌套括号 /
+     *       双引号 / 补全闭合）× 各 DBMS 核心子句快探，命中即三级阶梯。</li>
+     * </ol>
+     */
+    private Optional<InjectionFinding> verifySqlmapTime(RawRequest base,
+                                                        com.xzhscan.model.Models.ParameterIdentity target,
+                                                        WafWatch waf, String url, double mean, double std,
+                                                        int sleepSeconds, VerificationResult result, String hint) {
+        java.util.List<com.xzhscan.vendor.sql.SqlmapTimeModel.Boundary> bounds =
+                com.xzhscan.vendor.sql.SqlmapTimeModel.boundariesFor(target.originalValue);
+        // 只取前 3 个 boundary（类型匹配的优先），否则请求数失控
+        int boundCap = Math.min(3, bounds.size());
+        long hitFloor = (long) mean + (long) sleepSeconds * 850L;
+
+        // ---------- 阶段 1：条件对（TRUE 延迟 / FALSE 不延迟） ----------
+        Optional<InjectionFinding> retained = Optional.empty();
+        for (com.xzhscan.vendor.sql.SqlmapTimeModel.ConditionPair pair
+                : com.xzhscan.vendor.sql.SqlmapTimeModel.CONDITION_PAIRS) {
+            if (!budgetLeft()) {
+                break;
+            }
+            if (!hintAllows(hint, pair.db())) {
+                continue;
+            }
+            for (int bi = 0; bi < boundCap && budgetLeft(); bi++) {
+                com.xzhscan.vendor.sql.SqlmapTimeModel.Boundary b = bounds.get(bi);
+                String trueTpl = b.wrap(pair.trueClause());
+                String falseTpl = b.wrap(pair.falseClause());
+                RawResponse rTrue = sendMutated(base, target,
+                        com.xzhscan.vendor.sql.SqlmapTimeModel.render(trueTpl, sleepSeconds),
+                        waf, result, (long) sleepSeconds * 12_000L + 15_000L);
+                if (rTrue == null || rTrue.statusCode <= 0) {
+                    continue;
+                }
+                if (SqlWafDetector.blockedVsBaseline(toSimple(rTrue), waf.baseline) != null
+                        || SqlWafDetector.droppedVsBaseline(toSimple(rTrue), waf.baseline != null)) {
+                    continue;
+                }
+                RawResponse rFalse = sendMutated(base, target,
+                        com.xzhscan.vendor.sql.SqlmapTimeModel.render(falseTpl, sleepSeconds),
+                        waf, result, (long) sleepSeconds * 12_000L + 15_000L);
+                if (rFalse == null || rFalse.statusCode <= 0) {
+                    continue;
+                }
+                long delta = rTrue.elapsedMs - rFalse.elapsedMs;
+                // TRUE 明显慢（≈S 秒）、FALSE 接近基线 → 时间条件对成立
+                if (delta >= (long) sleepSeconds * 750L && rFalse.elapsedMs <= mean + 1_500L
+                        && rTrue.elapsedMs >= hitFloor) {
+                    // sqlmap retry 语义：同一 TRUE 子句复测一次，确认可重复
+                    RawResponse again = sendMutated(base, target,
+                            com.xzhscan.vendor.sql.SqlmapTimeModel.render(trueTpl, sleepSeconds),
+                            waf, result, (long) sleepSeconds * 12_000L + 15_000L);
+                    if (again == null || again.elapsedMs < hitFloor) {
+                        continue;
+                    }
+                    // v4.0：sqlmap checkFalsePositives 交叉验证——随机三数构造
+                    // "必须延迟/必须不延迟/非法语句不延迟"矩阵，任一不符即判假阳性，
+                    // 不进入定罪（这是 sqlmap 排除抖动误报的核心步骤）
+                    if (!sqlmapFalsePositivePass(base, target, waf, mean, sleepSeconds, result, b)) {
+                        result.note = (result.note == null || result.note.isEmpty() ? "" : result.note + "; ")
+                                + "sqlmap false-positive check failed (" + pair.label() + "@" + b.label() + ")";
+                        continue;
+                    }
+                    // 复用三级阶梯定罪（同一 boundary+clause，replace=true 表示纯模板值）
+                    Optional<InjectionFinding> f = threeTierTemplate(trueTpl, pair.db(), true,
+                            "sqlmap-pair:" + pair.label() + "@" + b.label(), base, target, waf, url,
+                            mean, std, sleepSeconds, result, null);
+                    if (f.isPresent() && f.get().verdict == VerifyVerdict.CONFIRMED) {
+                        return f;
+                    }
+                    retained = f.isPresent() ? f : retained;
+                }
+            }
+        }
+
+        // ---------- 阶段 2：boundary 枚举（快探 → 三级阶梯） ----------
+        for (int bi = 0; bi < boundCap && budgetLeft(); bi++) {
+            com.xzhscan.vendor.sql.SqlmapTimeModel.Boundary b = bounds.get(bi);
+            for (com.xzhscan.vendor.sql.SqlmapTimeModel.TimeClause c
+                    : com.xzhscan.vendor.sql.SqlmapTimeModel.TIME_CLAUSES) {
+                if (!budgetLeft()) {
+                    break;
+                }
+                if (!hintAllows(hint, c.db())) {
+                    continue;
+                }
+                String tpl = b.wrap(c.clause());
+                RawResponse r = sendMutated(base, target,
+                        com.xzhscan.vendor.sql.SqlmapTimeModel.render(tpl, sleepSeconds),
+                        waf, result, (long) sleepSeconds * 12_000L + 15_000L);
+                if (r == null || r.statusCode <= 0) {
+                    continue;
+                }
+                if (SqlWafDetector.blockedVsBaseline(toSimple(r), waf.baseline) != null
+                        || SqlWafDetector.droppedVsBaseline(toSimple(r), waf.baseline != null)) {
+                    continue;
+                }
+                if (r.elapsedMs < hitFloor) {
+                    continue;
+                }
+                Optional<InjectionFinding> f = threeTierTemplate(tpl, c.db(), true,
+                        "sqlmap:" + c.label() + "@" + b.label(), base, target, waf, url,
+                        mean, std, sleepSeconds, result, null);
+                if (f.isPresent() && f.get().verdict == VerifyVerdict.CONFIRMED) {
+                    return f;
+                }
+                retained = f.isPresent() ? f : retained;
+                break;  // 该 boundary 已出现延迟命中 → 直接复验，不再试同 boundary 其他子句
+            }
+        }
+        return retained;
+    }
+
+    /**
+     * v4.0：sqlmap 假阳性交叉验证（等价 {@code checkFalsePositives}）。
+     *
+     * <p>随机取 r1&lt;r2&lt;r3，依次发送：</p>
+     * <ul>
+     *   <li>{@code r1=r1}、{@code r2=r2} —— 必须延迟（真条件）；</li>
+     *   <li>{@code r1=r2}、{@code r1=r3}、{@code r3=r2} —— 必须不延迟（假条件）；</li>
+     *   <li>{@code "r3 r2"} —— 非法语句，必须不延迟。</li>
+     * </ul>
+     * <p>任一不符合 → 该点不按 SQL 条件执行（延迟来自抖动/缓存），判假阳性。</p>
+     */
+    private boolean sqlmapFalsePositivePass(RawRequest base,
+                                            com.xzhscan.model.Models.ParameterIdentity target,
+                                            WafWatch waf, double mean, int sleepSeconds,
+                                            VerificationResult result,
+                                            com.xzhscan.vendor.sql.SqlmapTimeModel.Boundary b) {
+        java.util.concurrent.ThreadLocalRandom rnd = java.util.concurrent.ThreadLocalRandom.current();
+        int r1 = 2 + rnd.nextInt(4);
+        int r2 = r1 + 1 + rnd.nextInt(3);
+        int r3 = r2 + 1 + rnd.nextInt(3);
+        long hitFloor = (long) mean + (long) sleepSeconds * 850L;
+        long fastCeil = (long) mean + 1_500L;
+        for (com.xzhscan.vendor.sql.SqlmapTimeModel.FalsePositiveProbe probe
+                : com.xzhscan.vendor.sql.SqlmapTimeModel.falsePositiveProbes(r1, r2, r3)) {
+            if (!budgetLeft()) {
+                return false; // 预算不足无法完成交叉验证 → 不当成已确认
+            }
+            RawResponse r = sendMutated(base, target,
+                    com.xzhscan.vendor.sql.SqlmapTimeModel.render(b.wrap(probe.clause()), sleepSeconds),
+                    waf, result, (long) sleepSeconds * 12_000L + 15_000L);
+            if (r == null || r.statusCode <= 0) {
+                return false;
+            }
+            if (probe.shouldDelay()) {
+                if (r.elapsedMs < hitFloor) {
+                    return false; // 真条件没变慢 → 假阳性
+                }
+            } else {
+                if (r.elapsedMs > fastCeil) {
+                    return false; // 假条件也变慢 → 假阳性
+                }
+            }
+        }
+        return true;
     }
 
     /** 时间快探候选（模板 + DB + replace 语义）。 */

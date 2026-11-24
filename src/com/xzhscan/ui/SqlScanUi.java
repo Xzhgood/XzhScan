@@ -1616,12 +1616,14 @@ public final class SqlScanUi {
             // v3.9：Intruder 流量监听（默认关）。仅状态码严格 200 的完整响应进入差分扫描，
             // 201/302/404/500 等一律跳过；200 只是准入条件，判定仍走原有安全闸/差分/二阶段。
             JCheckBox cIntruder = new JCheckBox("监听 Intruder 流量（仅 200 响应）", config.watchIntruder);
-            // v3.9.3：勾选即时生效（不依赖「应用设置」按钮）——排障实测发现用户只勾不点
-            // 应用导致开关看起来失灵；其余开关仍走应用按钮统一落盘。
-            cIntruder.addActionListener(e -> {
-                config.watchIntruder = cIntruder.isSelected();
-                log("INFO", "watchIntruder -> " + config.watchIntruder + "（勾选即时生效）");
-            });
+            // v4.0：全部开关统一"改即生效 + 立即落盘"——不再要求用户先勾选再点应用设置。
+            // 单一真相源：控件监听器写字段 → config.notifyChanged() → 扩展监听器 saveConfig。
+            bindToggle(cPhase1, v -> config.phase1Enabled = v);
+            bindToggle(cPhase2, v -> config.phase2Enabled = v);
+            bindToggle(cProxy, v -> config.watchProxy = v);
+            bindToggle(cRepeater, v -> config.watchRepeater = v);
+            bindToggle(cScanner, v -> config.watchScanner = v);
+            bindToggle(cIntruder, v -> config.watchIntruder = v);
             JCheckBox cJsonStrict = new JCheckBox("JSON 严格校验（变异失败禁止发送）", config.jsonStrictValidation);
             JCheckBox cTimeProbe = new JCheckBox("允许时间盲注探针·第二阶段（sleep 复验）", config.allowTimeBasedProbe);
             // v3.9.7：时间盲注延迟秒数（默认 5；2-3 秒会被系统卡顿误判）
@@ -1630,7 +1632,11 @@ public final class SqlScanUi {
             // v3.5：第一阶段时间探针/stacked/Oracle 三开关已随被动时间子系统移除
             // （时间盲注走右键人工触发的 Phase2 全模块序列，见 cTimeProbe 一项）。
             JCheckBox cDenyWrite = new JCheckBox("写语义接口默认拒绝", config.denyWriteLookingEndpoints);
+            bindToggle(cJsonStrict, v -> config.jsonStrictValidation = v);
+            bindToggle(cTimeProbe, v -> config.allowTimeBasedProbe = v);
+            bindToggle(cDenyWrite, v -> config.denyWriteLookingEndpoints = v);
 
+            // v4.0：spinner 变更即时生效（change 事件 → 写字段 → 落盘）
             SpinnerNumberModel spBaseline = new SpinnerNumberModel(config.baselineSamples, 2, 6, 1);
             SpinnerNumberModel spThreads = new SpinnerNumberModel(config.maxConcurrentScans, 1, 8, 1);
             SpinnerNumberModel spWeak = new SpinnerNumberModel(config.weakDeltaThreshold, 0, 10, 1);
@@ -1658,6 +1664,12 @@ public final class SqlScanUi {
             addPair(p, g, row++, "请求间隔（ms）：", new JSpinner(spRate));
             addPair(p, g, row++, "请求超时（ms）：", new JSpinner(spTimeout));
             addPair(p, g, row++, "时间盲注延迟（秒，默认5）：", new JSpinner(spDelay));
+            bindSpinner(spThreads, v -> config.maxConcurrentScans = v);
+            bindSpinner(spWeak, v -> config.weakDeltaThreshold = v);
+            bindSpinner(spRate, v -> config.requestIntervalMs = v);
+            bindSpinner(spTimeout, v -> config.requestTimeoutMs = v);
+            bindSpinner(spDedup, v -> config.dedupWindowMinutes = v);
+            bindSpinner(spDelay, v -> config.timeDelaySeconds = v);
             addPair(p, g, row++, "去重窗口（分钟，0=不去重）：", new JSpinner(spDedup));
             addPair(p, g, row++, "域名白名单（逗号分隔，空=全部）：", tfWhite);
             addPair(p, g, row++, "URL 黑名单（逗号分隔）：", tfBlack);
@@ -1686,6 +1698,7 @@ public final class SqlScanUi {
                 for (Runnable l : applyConfigListeners) {
                     l.run();
                 }
+                config.notifyChanged();
                 // v3.9.3：应用成功弹窗（对齐 AuthScan 页先例；含关键开关摘要）
                 try {
                     javax.swing.JOptionPane.showMessageDialog(apply,
@@ -1710,6 +1723,22 @@ public final class SqlScanUi {
             });
             addRow(p, g, row++, apply);
             return new JScrollPane(p);
+        }
+
+        /** v4.0：复选框绑定——勾选/取消立即写配置并触发落盘。 */
+        private void bindToggle(JCheckBox box, java.util.function.Consumer<Boolean> setter) {
+            box.addActionListener(e -> {
+                setter.accept(box.isSelected());
+                config.notifyChanged();
+            });
+        }
+
+        /** v4.0：数字框绑定——值变更立即写配置并触发落盘。 */
+        private void bindSpinner(SpinnerNumberModel model, java.util.function.IntConsumer setter) {
+            model.addChangeListener(e -> {
+                setter.accept(model.getNumber().intValue());
+                config.notifyChanged();
+            });
         }
 
         private void addRow(JPanel p, GridBagConstraints g, int row, JComponent c) {

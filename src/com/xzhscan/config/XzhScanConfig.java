@@ -6,6 +6,31 @@ package com.xzhscan.config;
  */
 public final class XzhScanConfig {
 
+    /**
+     * v4.0：配置变更监听器（不参与序列化/拷贝）。
+     * 单一真相源约定：任何字段被修改后调用 {@link #notifyChanged()}，
+     * 监听器负责立即持久化——杜绝"改内存≠落盘"导致的配置回滚。
+     */
+    private final transient java.util.List<Runnable> listeners = new java.util.ArrayList<>();
+
+    /** 注册变更监听（扩展装配时接 saveConfig）。 */
+    public void addListener(Runnable r) {
+        if (r != null) {
+            listeners.add(r);
+        }
+    }
+
+    /** 通知配置已变更（UI 控件改动后调用；监听器异常不得影响调用方）。 */
+    public void notifyChanged() {
+        for (Runnable r : listeners) {
+            try {
+                r.run();
+            } catch (Throwable ignored) {
+                // 持久化失败不应中断 UI 操作
+            }
+        }
+    }
+
     // ---------------- 总开关 ----------------
     /** 第一阶段（XiaSQL 被动初筛）总开关。 */
     public boolean phase1Enabled = true;
