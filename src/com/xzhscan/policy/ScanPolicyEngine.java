@@ -82,6 +82,8 @@ public final class ScanPolicyEngine {
 
     private final XzhScanConfig config;
     private volatile boolean paused;
+    /** v4.1：Burp Target Scope 判定（扩展装配时注入；测试/无头环境为 null=不检查）。 */
+    private volatile java.util.function.Predicate<String> scopeChecker;
     /** host -> 最后请求时间戳（简单令牌间隔）。 */
     private final Map<String, AtomicLong> lastSendAt = new ConcurrentHashMap<>();
 
@@ -101,10 +103,31 @@ public final class ScanPolicyEngine {
         return paused;
     }
 
-    /** 主动变异请求的准入判定。 */
+    /** 注入 Target Scope 判定（扩展 initialize 时接线 montoya scope）。 */
+    public void setScopeChecker(java.util.function.Predicate<String> checker) {
+        this.scopeChecker = checker;
+    }
+
+    /** 主动变异请求的准入判定（自动流量：受 Target Scope 约束）。 */
     public Decision check(RawRequest request) {
+        return check(request, false);
+    }
+
+    /** 手动入口（右键/数据版）：用户显式授权，跳过 Target Scope，其余规则照常。 */
+    public Decision checkForManual(RawRequest request) {
+        return check(request, true);
+    }
+
+    private Decision check(RawRequest request, boolean manual) {
         if (paused) {
             return Decision.deny("manually paused");
+        }
+        // v4.1：自动流量必须在 Burp Target Scope 内（用户评审 P0：默认安全）
+        if (!manual && config.requireInScope) {
+            java.util.function.Predicate<String> sc = scopeChecker;
+            if (sc != null && !sc.test(request.url)) {
+                return Decision.deny("out-of-scope (Burp Target Scope)");
+            }
         }
         String url = request.url.toLowerCase(Locale.ROOT);
         String host = hostOf(url);
@@ -115,7 +138,7 @@ public final class ScanPolicyEngine {
             boolean hit = false;
             for (String w : config.domainWhitelist.split(",")) {
                 String t = w.trim().toLowerCase(Locale.ROOT);
-                if (!t.isEmpty() && host.contains(t)) {
+                if (hostMatches(host, t)) {
                     hit = true;
                     break;
                 }
@@ -208,5 +231,21 @@ public final class ScanPolicyEngine {
 
     private static boolean isBlank(String s) {
         return s == null || s.trim().isEmpty();
+    }
+
+    /**
+     * v4.1：白名单精确匹配（原实现 host.contains 为子串匹配，
+     * "example.com.evil.net" / "evilexample.com" 都会被误放行）。
+     * 支持 exact / 子域 / 通配 "*.example.com"。
+     */
+    private static boolean hostMatches(String host, String rule) {
+        String r = rule.trim().toLowerCase(Locale.ROOT);
+        if (r.isEmpty()) {
+            return false;
+        }
+        if (r.startsWith("*.")) {
+            return host.endsWith(r.substring(1));
+        }
+        return host.equals(r) || host.endsWith("." + r);
     }
 }

@@ -20,7 +20,7 @@ import com.xzhscan.ui.SqlScanUi;
  */
 public final class XzhScanExtension implements BurpExtension {
 
-    public static final String VERSION = "4.0.0";
+    public static final String VERSION = "4.1.0";
 
     private static final String NL = String.valueOf((char) 10);
 
@@ -41,6 +41,14 @@ public final class XzhScanExtension implements BurpExtension {
         config = loadConfig(api);
         evidence = new EvidenceStore();
         policy = new ScanPolicyEngine(config);
+        // v4.1：自动发包默认受 Burp Target Scope 约束（用户评审 P0）
+        policy.setScopeChecker(url -> {
+            try {
+                return api.scope().isInScope(url);
+            } catch (Throwable t) {
+                return false; // scope 不可用时保守拒绝
+            }
+        });
         orchestrator = new ScanOrchestrator(config, new BurpTransport(api, config.requestTimeoutMs), evidence, policy);
         listener = new TrafficListener(api, config, orchestrator);
 

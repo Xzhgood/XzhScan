@@ -233,7 +233,8 @@ public final class ScanOrchestrator {
         try {
             executor.submit(() -> {
                 try {
-                    ScanPolicyEngine.Decision d = policy.check(candidate.originalRequest);
+                    // v4.1：手动验证 = 用户显式授权，跳过 Target Scope（其余规则照常）
+                    ScanPolicyEngine.Decision d = policy.checkForManual(candidate.originalRequest);
                     if (!d.allowed) {
                         cb.onVerification(manualResult(candidate, com.xzhscan.model.Models.VerifyVerdict.INVALID,
                                 "blocked-by-policy (manual verify): " + d.reason));

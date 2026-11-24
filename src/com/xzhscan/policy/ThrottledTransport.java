@@ -20,6 +20,11 @@ public final class ThrottledTransport implements Transport {
 
     @Override
     public RawResponse send(RawRequest request) throws Exception {
+        // v4.1：暂停 = 真正停止发包（用户评审 P0）。已开跑的任务在下一发请求时
+        // 同样被挡住（返回 null = 未发送），不再只是"新任务不入队"。
+        if (policy.isPaused()) {
+            return null;
+        }
         policy.throttle(request.url);
         return delegate.send(request);
     }
@@ -30,6 +35,9 @@ public final class ThrottledTransport implements Transport {
      */
     @Override
     public RawResponse send(RawRequest request, long timeoutMs) throws Exception {
+        if (policy.isPaused()) {
+            return null;
+        }
         policy.throttle(request.url);
         return delegate.send(request, timeoutMs);
     }

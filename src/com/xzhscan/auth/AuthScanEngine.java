@@ -166,7 +166,15 @@ public final class AuthScanEngine {
         // 空响应/极短响应：不能作为"获得资源"的证据（任务书 6.8）
         boolean emptyEvidence = lo < 64 || ll < 64;
         if (allSame) {
-            return emptyEvidence ? Verdict.SUSPECTED : Verdict.UNAUTHORIZED;
+            // v4.1（用户评审 P0）：拒绝态优先判定——三个身份拿到同一份 401/403 是
+            // "都被拒绝"，不是越权（原实现无条件 UNAUTHORIZED，短拒绝页还会被判 SUSPECTED）。
+            if (isDenialStatus(so)) {
+                return Verdict.SAFE;
+            }
+            if (emptyEvidence) {
+                return Verdict.SUSPECTED;
+            }
+            return Verdict.UNAUTHORIZED;
         }
         if (lowSameCodeLen) {
             if (emptyEvidence) {
@@ -180,7 +188,18 @@ public final class AuthScanEngine {
             }
             return Verdict.SUSPECTED;
         }
-        return Verdict.SAFE;
+        // v4.1（用户评审 P0）：低权限/无权限被明确拒绝 → SAFE；
+        // 其余长度/状态不一致的情况无法判定，落 SUSPECTED（原实现一律 SAFE，
+        // 会把"低权限看到另一份内容"误导成'不存在'）。
+        if (isDenialStatus(sl) || isDenialStatus(sn)) {
+            return Verdict.SAFE;
+        }
+        return Verdict.SUSPECTED;
+    }
+
+    /** 401/403 = 拒绝态（服务端明确表示无权限）。 */
+    private static boolean isDenialStatus(int status) {
+        return status == 401 || status == 403;
     }
 
     private static String summaryOf(PermResult r) {

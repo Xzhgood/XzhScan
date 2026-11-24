@@ -860,6 +860,16 @@ public final class SqlVerificationEngine {
             if (r.elapsedMs < hitFloor) {
                 continue;
             }
+            // v4.0.1（P0-2）：旧时间路径也必须过 sqlmap 假阳性交叉验证——
+            // 此前只有 sqlmap 条件对路径受保护，这条从 v3.4 存在的主路径裸奔。
+            com.xzhscan.vendor.sql.SqlmapTimeModel.Boundary fpBoundary =
+                    com.xzhscan.vendor.sql.SqlmapTimeModel.boundariesFor(target.originalValue).get(0);
+            if (!sqlmapFalsePositivePass(base, target, waf, mean, sleepSeconds, result,
+                    fpBoundary, p.db)) {
+                result.note = (result.note == null || result.note.isEmpty() ? "" : result.note + "; ")
+                        + "false-positive check failed (" + p.db + ")";
+                continue;
+            }
             Optional<InjectionFinding> f = threeTierTemplate(p.template, p.db, p.replace,
                     "time-quick:" + p.db, base, target, waf, url, mean, std, sleepSeconds, result, null);
             if (f.isPresent() && f.get().verdict == VerifyVerdict.CONFIRMED) {
@@ -941,7 +951,7 @@ public final class SqlVerificationEngine {
                     // v4.0：sqlmap checkFalsePositives 交叉验证——随机三数构造
                     // "必须延迟/必须不延迟/非法语句不延迟"矩阵，任一不符即判假阳性，
                     // 不进入定罪（这是 sqlmap 排除抖动误报的核心步骤）
-                    if (!sqlmapFalsePositivePass(base, target, waf, mean, sleepSeconds, result, b)) {
+                    if (!sqlmapFalsePositivePass(base, target, waf, mean, sleepSeconds, result, b, pair.db())) {
                         result.note = (result.note == null || result.note.isEmpty() ? "" : result.note + "; ")
                                 + "sqlmap false-positive check failed (" + pair.label() + "@" + b.label() + ")";
                         continue;
@@ -1011,15 +1021,20 @@ public final class SqlVerificationEngine {
                                             com.xzhscan.model.Models.ParameterIdentity target,
                                             WafWatch waf, double mean, int sleepSeconds,
                                             VerificationResult result,
-                                            com.xzhscan.vendor.sql.SqlmapTimeModel.Boundary b) {
+                                            com.xzhscan.vendor.sql.SqlmapTimeModel.Boundary b,
+                                            String db) {
         java.util.concurrent.ThreadLocalRandom rnd = java.util.concurrent.ThreadLocalRandom.current();
         int r1 = 2 + rnd.nextInt(4);
         int r2 = r1 + 1 + rnd.nextInt(3);
         int r3 = r2 + 1 + rnd.nextInt(3);
         long hitFloor = (long) mean + (long) sleepSeconds * 850L;
         long fastCeil = (long) mean + 1_500L;
-        for (com.xzhscan.vendor.sql.SqlmapTimeModel.FalsePositiveProbe probe
-                : com.xzhscan.vendor.sql.SqlmapTimeModel.falsePositiveProbes(r1, r2, r3)) {
+        java.util.List<com.xzhscan.vendor.sql.SqlmapTimeModel.FalsePositiveProbe> probes =
+                com.xzhscan.vendor.sql.SqlmapTimeModel.falsePositiveProbes(db, r1, r2, r3);
+        if (probes.isEmpty()) {
+            return true; // 该 DBMS 无语义对应语法 → 跳过检查（不误杀真注入）
+        }
+        for (com.xzhscan.vendor.sql.SqlmapTimeModel.FalsePositiveProbe probe : probes) {
             if (!budgetLeft()) {
                 return false; // 预算不足无法完成交叉验证 → 不当成已确认
             }

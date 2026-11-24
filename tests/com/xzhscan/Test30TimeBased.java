@@ -37,12 +37,24 @@ public final class Test30TimeBased {
     }
 
     private static final Pattern SLEEP_NUM = Pattern.compile("sleep\\((\\d)\\)", Pattern.CASE_INSENSITIVE);
+    /** v4.0.1：交叉验证的 IF 减法形态（sleep(S-(if((a=b),0,S)))）。 */
+    private static final Pattern SUB_FORM =
+            Pattern.compile("sleep\\((\\d+)-\\(if\\(\\((\\d+)=(\\d+)\\),0,(\\d+)\\)\\)\\)");
 
     /** MySQL QUICK 探针模拟：' AND SLEEP(S)-- - 按秒数延时；其余 25ms。 */
     private static Support.FakeTransport mysqlQuick(long belowFloorMs) {
         Support.FakeTransport t = new Support.FakeTransport();
         t.responder = (r, i) -> {
             String u = ParameterExtractor.urlDecode(r.url).toLowerCase();
+            Matcher sub = SUB_FORM.matcher(u);
+            if (sub.find()) {
+                int sec = Integer.parseInt(sub.group(1));
+                int a = Integer.parseInt(sub.group(2));
+                int b = Integer.parseInt(sub.group(3));
+                // belowFloor 场景：条件为真时也只给 belowFloorMs（低于命中门槛 → 不确认）
+                long ms = a != b ? 30L : (belowFloorMs > 0 ? belowFloorMs : sec * 1200L);
+                return resp(200, "{\"ok\":true}", ms);
+            }
             Matcher m = SLEEP_NUM.matcher(u);
             if (u.contains("admin' and sleep(") && m.find()) {
                 int sec = Integer.parseInt(m.group(1));

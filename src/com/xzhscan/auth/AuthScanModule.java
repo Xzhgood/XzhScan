@@ -146,6 +146,10 @@ public final class AuthScanModule {
         try {
             executor.submit(() -> {
                 try {
+                    // v4.1：关闭后已入队任务不再执行（用户评审 P0：启停要真的停）
+                    if (!enabled) {
+                        return;
+                    }
                     PermResult result = engine.check(request, identity);
                     result.requestId = id;
                     emitResult(result);

@@ -95,6 +95,12 @@ public final class XzhScanConfig {
     public boolean reportWafBlocked = true;
 
     // ---------------- 安全策略 ----------------
+    /**
+     * v4.1（用户评审 P0）：自动发包默认受 Burp Target Scope 约束。
+     * Proxy/Repeater/Scanner/Intruder 流量必须在 Target Scope 内才进入扫描；
+     * 右键手动验证属于用户显式授权，不受此限制。
+     */
+    public boolean requireInScope = true;
     public String domainWhitelist = "";   // 逗号分隔；空=全部允许
     public String urlBlacklist = "";      // 逗号分隔；命中即拒
     /** 默认拒绝写语义接口（方法+路径综合判定，见 ScanPolicyEngine）。 */
@@ -148,6 +154,7 @@ public final class XzhScanConfig {
         c.timeDelaySeconds = timeDelaySeconds;
         c.verifyTimeoutMs = verifyTimeoutMs;
         c.reportWafBlocked = reportWafBlocked;
+        c.requireInScope = requireInScope;
         c.domainWhitelist = domainWhitelist;
         c.urlBlacklist = urlBlacklist;
         c.denyWriteLookingEndpoints = denyWriteLookingEndpoints;

@@ -57,11 +57,19 @@ public final class EvidenceStore {
     }
 
     /** 容量上限：超限后按插入顺序淘汰最老证据（防长期驻留内存）。 */
-    public static final int MAX_ENTRIES = 4000;
+    public static final int MAX_ENTRIES = 8000;
+
+    /** v4.1：被容量淘汰的证据 ID（有界，供 UI 区分"没有证据"与"证据已淘汰"）。 */
+    private final java.util.Set<String> evicted = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     private final Map<String, Evidence> map = new ConcurrentHashMap<>();
     private final Queue<String> order = new ArrayDeque<>();
     private final AtomicLong seq = new AtomicLong();
+
+    /** v4.1：该证据 ID 是否因容量上限被淘汰（UI 据此提示"证据已淘汰"）。 */
+    public boolean isEvicted(String id) {
+        return id != null && evicted.contains(id);
+    }
 
     public String put(String kind, RawRequest request, RawResponse response) {
         String id = "EV-" + seq.incrementAndGet();
@@ -73,7 +81,11 @@ public final class EvidenceStore {
                 String oldest = order.poll();
                 if (oldest != null) {
                     map.remove(oldest);
+                    evicted.add(oldest);
                 }
+            }
+            if (evicted.size() > MAX_ENTRIES * 2) {
+                evicted.clear(); // 有界，防止淘汰集合自身成为泄漏源
             }
         }
         return id;

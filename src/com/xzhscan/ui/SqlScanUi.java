@@ -1645,6 +1645,9 @@ public final class SqlScanUi {
             SpinnerNumberModel spScore = new SpinnerNumberModel(config.minDifferenceScore * 100, 5, 100, 1);
             SpinnerNumberModel spDedup = new SpinnerNumberModel(config.dedupWindowMinutes, 0, 1440, 10);
 
+            // v4.1：自动发包默认受 Burp Target Scope 约束（用户评审 P0）
+            JCheckBox cScope = new JCheckBox("仅自动扫描 Burp Target Scope 内目标（推荐开启）", config.requireInScope);
+            bindToggle(cScope, v -> config.requireInScope = v);
             JTextField tfWhite = new JTextField(config.domainWhitelist, 26);
             JTextField tfBlack = new JTextField(config.urlBlacklist, 26);
 
@@ -1671,7 +1674,8 @@ public final class SqlScanUi {
             bindSpinner(spDedup, v -> config.dedupWindowMinutes = v);
             bindSpinner(spDelay, v -> config.timeDelaySeconds = v);
             addPair(p, g, row++, "去重窗口（分钟，0=不去重）：", new JSpinner(spDedup));
-            addPair(p, g, row++, "域名白名单（逗号分隔，空=全部）：", tfWhite);
+            addRow(p, g, row++, cScope);
+            addPair(p, g, row++, "域名白名单（精确/子域匹配，空=全部）：", tfWhite);
             addPair(p, g, row++, "URL 黑名单（逗号分隔）：", tfBlack);
 
             JButton apply = new JButton("应用设置");

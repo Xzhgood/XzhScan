@@ -70,6 +70,7 @@ public final class ConfigCodec {
         m.put("authNoAuthHeaders", c.authNoAuthHeaders.replace(NL, ESC_NL));
         m.put("authWhitelistDomains", c.authWhitelistDomains.replace(NL, ESC_NL));
         m.put("authExtraExtensions", c.authExtraExtensions == null ? "" : c.authExtraExtensions);
+        m.put("requireInScope", String.valueOf(c.requireInScope));
         m.put("domainWhitelist", c.domainWhitelist == null ? "" : c.domainWhitelist);
         m.put("urlBlacklist", c.urlBlacklist == null ? "" : c.urlBlacklist);
         StringBuilder sb = new StringBuilder();
@@ -123,6 +124,7 @@ public final class ConfigCodec {
                 case "authExtraExtensions" -> c.authExtraExtensions = v;
                 // probeTimePayloads/timeProbePassRatio/allowStackedProbes/probeOracleTime
                 // （v3.5 移除）与 dir* 键（v2.1 已删除 DirScan 模块）：读取时忽略，不报错
+                case "requireInScope" -> c.requireInScope = Boolean.parseBoolean(v);
                 case "domainWhitelist" -> c.domainWhitelist = v;
                 case "urlBlacklist" -> c.urlBlacklist = v;
                 default -> {

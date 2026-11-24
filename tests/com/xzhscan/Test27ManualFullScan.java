@@ -72,8 +72,16 @@ public final class Test27ManualFullScan {
 
         // ---------- 3. 全模块·时间路径（前面模块全空 -> 时间家族循环 CONFIRMED） ----------
         Support.FakeTransport timeOracle = new Support.FakeTransport();
+        java.util.regex.Pattern subForm = java.util.regex.Pattern.compile("sleep\\((\\d+)-\\(if\\(\\((\\d+)=(\\d+)\\),0,(\\d+)\\)\\)\\)");
         timeOracle.responder = (r, i) -> {
             String u = ParameterExtractor.urlDecode(r.url).toLowerCase();
+            java.util.regex.Matcher sub = subForm.matcher(u);
+            if (sub.find()) {
+                int sec = Integer.parseInt(sub.group(1));
+                int a = Integer.parseInt(sub.group(2));
+                int b = Integer.parseInt(sub.group(3));
+                return resp(200, "{\"ok\":true}", a == b ? sec * 1200L : 30L);
+            }
             long ms = 25;
             if (u.contains("11 and sleep(5)")) {
                 ms = 6000; // NUMERIC 集首个家族三级 S=5
