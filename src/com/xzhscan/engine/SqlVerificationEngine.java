@@ -1205,6 +1205,26 @@ public final class SqlVerificationEngine {
         return v == null ? "" : v;
     }
 
+    /**
+     * v4.2.2：强注入特征判定（比 looksLikeInjection 更严）——只认引号、注释符、
+     * DB 函数、SQL 关键字；不含 "-" "," "/" 等常见业务值字符（-1、日期、路径不误杀）。
+     * 用途：Phase1 跳过"基线请求本身携带 payload"的参数（fuzz/Intruder 场景）。
+     */
+    public static boolean looksLikeStrongInjection(String v) {
+        if (v == null || v.isEmpty()) {
+            return false;
+        }
+        String lower = v.toLowerCase(java.util.Locale.ROOT);
+        for (String kw : new String[]{"select", "union", "sleep", "waitfor", "dbms_pipe",
+                "extractvalue", "updatexml", "case when", "1=1", " and ", " or "}) {
+            if (lower.contains(kw)) {
+                return true;
+            }
+        }
+        return v.indexOf('\'') >= 0 || v.indexOf('"') >= 0
+                || v.contains("--") || v.contains("/*") || v.contains("#");
+    }
+
     /** 原值是否已含注入特征（fuzz 载荷 / 手工闭合引号等）。 */
     public static boolean looksLikeInjection(String v) {
         if (v == null || v.isEmpty()) {

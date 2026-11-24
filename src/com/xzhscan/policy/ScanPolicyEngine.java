@@ -84,6 +84,10 @@ public final class ScanPolicyEngine {
     private volatile boolean paused;
     /** v4.1：Burp Target Scope 判定（扩展装配时注入；测试/无头环境为 null=不检查）。 */
     private volatile java.util.function.Predicate<String> scopeChecker;
+    /** v4.2.1：首次因 Scope 拒绝时的一次性提示（避免用户看到 blocked 却不知原因）。 */
+    private final java.util.concurrent.atomic.AtomicBoolean outOfScopeWarned =
+            new java.util.concurrent.atomic.AtomicBoolean();
+    private volatile Runnable onOutOfScopeWarn;
     /** host -> 最后请求时间戳（简单令牌间隔）。 */
     private final Map<String, AtomicLong> lastSendAt = new ConcurrentHashMap<>();
 
@@ -108,6 +112,11 @@ public final class ScanPolicyEngine {
         this.scopeChecker = checker;
     }
 
+    /** 注册"首次 out-of-scope 拒绝"提示回调（扩展装配时接线日志）。 */
+    public void setOutOfScopeWarn(Runnable r) {
+        this.onOutOfScopeWarn = r;
+    }
+
     /** 主动变异请求的准入判定（自动流量：受 Target Scope 约束）。 */
     public Decision check(RawRequest request) {
         return check(request, false);
@@ -126,6 +135,12 @@ public final class ScanPolicyEngine {
         if (!manual && config.requireInScope) {
             java.util.function.Predicate<String> sc = scopeChecker;
             if (sc != null && !sc.test(request.url)) {
+                if (outOfScopeWarned.compareAndSet(false, true)) {
+                    Runnable w = onOutOfScopeWarn;
+                    if (w != null) {
+                        w.run();
+                    }
+                }
                 return Decision.deny("out-of-scope (Burp Target Scope)");
             }
         }

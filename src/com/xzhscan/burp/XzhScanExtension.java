@@ -20,7 +20,7 @@ import com.xzhscan.ui.SqlScanUi;
  */
 public final class XzhScanExtension implements BurpExtension {
 
-    public static final String VERSION = "4.2.0";
+    public static final String VERSION = "4.2.2";
 
     private static final String NL = String.valueOf((char) 10);
 
@@ -41,6 +41,15 @@ public final class XzhScanExtension implements BurpExtension {
         config = loadConfig(api);
         evidence = new EvidenceStore();
         policy = new ScanPolicyEngine(config);
+        policy.setOutOfScopeWarn(() -> api.logging().logToOutput(
+                "[XzhScan] 自动扫描仅限 Burp Target Scope 内目标——当前流量被跳过（blocked-by-policy）。"
+                        + " 解决：① Burp Target 标签 → Scope → 把目标 URL 加入 Scope（推荐）；"
+                        + "或 ② SQLScan 设置页取消勾选「仅自动扫描 Burp Target Scope 内目标」。"
+                        + " 右键「XzhScan SQL 验证」不受此限制，可随时手动验证。"));
+        if (config.requireInScope) {
+            api.logging().logToOutput("[XzhScan] Target Scope 约束已启用：自动流量必须在 Scope 内。"
+                    + "未配置 Scope 时差分列表会全部显示 blocked-by-policy。");
+        }
         // v4.1：自动发包默认受 Burp Target Scope 约束（用户评审 P0）
         policy.setScopeChecker(url -> {
             try {

@@ -1651,7 +1651,9 @@ public final class SqlScanUi {
             SpinnerNumberModel spDedup = new SpinnerNumberModel(config.dedupWindowMinutes, 0, 1440, 10);
 
             // v4.1：自动发包默认受 Burp Target Scope 约束（用户评审 P0）
-            JCheckBox cScope = new JCheckBox("仅自动扫描 Burp Target Scope 内目标（推荐开启）", config.requireInScope);
+            JCheckBox cScope = new JCheckBox(
+                    "仅自动扫描 Burp Target Scope 内目标（需先把目标加入 Target→Scope；"
+                            + "关闭则全量监听）", config.requireInScope);
             bindToggle(cScope, v -> config.requireInScope = v);
             JTextField tfWhite = new JTextField(config.domainWhitelist, 26);
             JTextField tfBlack = new JTextField(config.urlBlacklist, 26);

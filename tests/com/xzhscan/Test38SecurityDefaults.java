@@ -112,6 +112,24 @@ public final class Test38SecurityDefaults {
         }
         t.check(store.isEvicted(firstId), "超容量后最老证据被标记淘汰");
         t.check(store.get(firstId) == null, "被淘汰证据不可再取（UI 可据此提示）");
+
+        // ---------- 6. fuzz 基线判定（v4.2.2） ----------
+        // Phase1 对"原始值已是 payload"的参数跳过差分（基线语义已变，变异无注入含义）
+        t.check(com.xzhscan.engine.SqlVerificationEngine
+                        .looksLikeStrongInjection("; WAITFOR DELAY '0:0:5'-- -"),
+                "MSSQL 时间 payload 判为 fuzz 基线");
+        t.check(com.xzhscan.engine.SqlVerificationEngine
+                        .looksLikeStrongInjection("1' AND 1=1-- -"),
+                "布尔 payload 判为 fuzz 基线");
+        t.check(com.xzhscan.engine.SqlVerificationEngine
+                        .looksLikeStrongInjection("'/**/AND/**/SLEEP(5)"),
+                "注释/SLEEP payload 判为 fuzz 基线");
+        t.check(!com.xzhscan.engine.SqlVerificationEngine.looksLikeStrongInjection("-1"),
+                "业务值 -1 不误判为 fuzz 基线");
+        t.check(!com.xzhscan.engine.SqlVerificationEngine.looksLikeStrongInjection("2024-01-01"),
+                "日期不误判为 fuzz 基线");
+        t.check(!com.xzhscan.engine.SqlVerificationEngine.looksLikeStrongInjection("admin"),
+                "普通值不误判为 fuzz 基线");
     }
 
     private static AuthScanEngine.IdentityConfig identity(String lowHeader, String noAuthName) {

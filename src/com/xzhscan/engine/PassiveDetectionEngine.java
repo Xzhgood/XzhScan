@@ -167,6 +167,22 @@ public final class PassiveDetectionEngine {
 
         // ---- 逐参数 × 探针 ----
         for (ParameterIdentity param : testable) {
+            // v4.2.2：原始值已是注入载荷（Intruder/fuzz 场景）→ 跳过差分变异。
+            // 理由：基线请求本身携带 payload，其响应是"出错/命中"后的页面，再对它做
+            // 变异得到的差异没有注入语义，只会产生噪声候选（实测：同一 fuzz 请求变体
+            // 响应字节级相同，却可能因基线异常被判候选）。显式记录原因，不静默丢弃。
+            if (com.xzhscan.engine.SqlVerificationEngine.looksLikeStrongInjection(param.originalValue)) {
+                if (cb != null) {
+                    cb.onGateView(new GateProbeView(record.requestId, originalRequest.url, param.name, param.path,
+                            param.location.name(), baseline.minLen, -1, 0, 1.0, 0,
+                            "REJECT", "original value already looks like injection payload (fuzz baseline)",
+                            -1, false, "timing not measured", null, -1, -1, null, baselineEvidenceIdOf()));
+                }
+                if (record.skipReasons.size() < 8) {
+                    record.skipReasons.add("skipped fuzz-baseline param: " + param.path);
+                }
+                continue;
+            }
             // v3.5：被动 = XiaSQL 纯差分（引号对 + 数字算术/LIMIT 对）；时间盲注
             // 一律走右键人工触发的 Phase2 全模块序列（QUICK/XRAY 五类 DBMS 模板 +
             // 三级 sleep 阶梯定罪）。被动时间探针子系统已整体移除。
