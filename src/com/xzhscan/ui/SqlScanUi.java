@@ -1629,6 +1629,11 @@ public final class SqlScanUi {
             // v3.9.7：时间盲注延迟秒数（默认 5；2-3 秒会被系统卡顿误判）
             SpinnerNumberModel spDelay = new SpinnerNumberModel(
                     Math.max(2, Math.min(10, config.timeDelaySeconds)), 2, 10, 1);
+            // v4.1.1：探针分级 + 时间模块参数配额
+            SpinnerNumberModel spTimeLevel = new SpinnerNumberModel(
+                    Math.max(1, Math.min(2, config.timeProbeLevel)), 1, 2, 1);
+            SpinnerNumberModel spTimeParams = new SpinnerNumberModel(
+                    Math.max(1, Math.min(30, config.maxTimeParamsPerRequest)), 1, 30, 1);
             // v3.5：第一阶段时间探针/stacked/Oracle 三开关已随被动时间子系统移除
             // （时间盲注走右键人工触发的 Phase2 全模块序列，见 cTimeProbe 一项）。
             JCheckBox cDenyWrite = new JCheckBox("写语义接口默认拒绝", config.denyWriteLookingEndpoints);
@@ -1667,12 +1672,16 @@ public final class SqlScanUi {
             addPair(p, g, row++, "请求间隔（ms）：", new JSpinner(spRate));
             addPair(p, g, row++, "请求超时（ms）：", new JSpinner(spTimeout));
             addPair(p, g, row++, "时间盲注延迟（秒，默认5）：", new JSpinner(spDelay));
+            addPair(p, g, row++, "时间探针分级（1=核心快，2=全量）：", new JSpinner(spTimeLevel));
+            addPair(p, g, row++, "单请求时间模块参数上限（默认5）：", new JSpinner(spTimeParams));
             bindSpinner(spThreads, v -> config.maxConcurrentScans = v);
             bindSpinner(spWeak, v -> config.weakDeltaThreshold = v);
             bindSpinner(spRate, v -> config.requestIntervalMs = v);
             bindSpinner(spTimeout, v -> config.requestTimeoutMs = v);
             bindSpinner(spDedup, v -> config.dedupWindowMinutes = v);
             bindSpinner(spDelay, v -> config.timeDelaySeconds = v);
+            bindSpinner(spTimeLevel, v -> config.timeProbeLevel = v);
+            bindSpinner(spTimeParams, v -> config.maxTimeParamsPerRequest = v);
             addPair(p, g, row++, "去重窗口（分钟，0=不去重）：", new JSpinner(spDedup));
             addRow(p, g, row++, cScope);
             addPair(p, g, row++, "域名白名单（精确/子域匹配，空=全部）：", tfWhite);
@@ -1696,6 +1705,8 @@ public final class SqlScanUi {
                 config.requestIntervalMs = spRate.getNumber().intValue();
                 config.requestTimeoutMs = spTimeout.getNumber().intValue();
                 config.timeDelaySeconds = spDelay.getNumber().intValue();
+                config.timeProbeLevel = spTimeLevel.getNumber().intValue();
+                config.maxTimeParamsPerRequest = spTimeParams.getNumber().intValue();
                 config.dedupWindowMinutes = spDedup.getNumber().intValue();
                 config.domainWhitelist = tfWhite.getText().trim();
                 config.urlBlacklist = tfBlack.getText().trim();

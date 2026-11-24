@@ -331,23 +331,50 @@ public final class PayloadRegistry {
         return "NUMERIC".equals(ctx) ? "APPEND" : "NUMBER_TO_STRING_APPEND";
     }
 
+    /**
+     * v4.1.1：规则 ID 改为按「DB + 形态 + 组内序号」生成，不再依赖数组索引——
+     * 探针可自由重排（query SLEEP 前置）而既有 ID 语义保持稳定
+     * （QT-MYSQL-SLEEP-01 永远是 MySQL 裸 SLEEP 字符型）。
+     */
     private static String qtId(int i) {
-        return switch (i) {
-            case 0 -> "QT-MYSQL-SLEEP-01";
-            case 1 -> "QT-MYSQL-SLEEP-02";
-            case 2 -> "QT-MSSQL-WAITFOR-01";
-            case 3 -> "QT-MSSQL-WAITFOR-02";
-            case 4 -> "QT-PG-PGSLEEP-01";
-            case 5 -> "QT-PG-PGSLEEP-02";
-            case 6 -> "QT-ORA-PIPE-01";
-            case 7 -> "QT-ORA-PIPE-02";
-            // v4.0：sqlmap query-SLEEP 形态（追加在原 8 条之后，保持旧 ID 不变）
-            case 8 -> "QT-MYSQL-QSLEEP-01";
-            case 9 -> "QT-MYSQL-QSLEEP-02";
-            // 兜底不再复用已删除规则的 ID（此前 default 返回 QT-SQLITE-RBLOB-01，
-            // 新增探针即与历史 ID 冲突 → 唯一性断言失败）
-            default -> "QT-EXTRA-" + (i + 1);
+        TimeProbe p = SqlPayloadLibrary.QUICK_TIME_PROBES.get(i);
+        String kind = qtKind(p);
+        String dbTag = switch (p.db()) {
+            case "MySQL" -> "MYSQL";
+            case "MSSQL" -> "MSSQL";
+            case "PostgreSQL" -> "PG";
+            case "Oracle" -> "ORA";
+            default -> p.db().toUpperCase(java.util.Locale.ROOT).replace(" ", "");
         };
+        int n = 0;
+        for (int k = 0; k <= i; k++) {
+            TimeProbe q = SqlPayloadLibrary.QUICK_TIME_PROBES.get(k);
+            if (q.db().equals(p.db()) && qtKind(q).equals(kind)) {
+                n++;
+            }
+        }
+        return String.format("QT-%s-%s-%02d", dbTag, kind, n);
+    }
+
+    /**
+     * 探针形态分类（保持既有 ID 语义稳定）：
+     * MySQL 双层 SELECT 包裹 → QSLEEP，否则 SLEEP；MSSQL→WAITFOR；PG→PGSLEEP；Oracle→PIPE。
+     */
+    private static String qtKind(TimeProbe p) {
+        String t = p.template().toLowerCase(java.util.Locale.ROOT);
+        switch (p.db()) {
+            case "MySQL":
+                return (t.contains("from (select(sleep") || t.contains("from (select(sleep("))
+                        ? "QSLEEP" : "SLEEP";
+            case "MSSQL":
+                return "WAITFOR";
+            case "PostgreSQL":
+                return "PGSLEEP";
+            case "Oracle":
+                return "PIPE";
+            default:
+                return "TIME";
+        }
     }
 
     private static String qtFamily(TimeProbe p) {

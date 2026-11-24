@@ -83,10 +83,12 @@ public final class Test27ManualFullScan {
                 return resp(200, "{\"ok\":true}", a == b ? sec * 1200L : 30L);
             }
             long ms = 25;
-            if (u.contains("11 and sleep(5)")) {
-                ms = 6000; // NUMERIC 集首个家族三级 S=5
-            } else if (u.contains("11 and sleep(6)")) {
-                ms = 7200;
+            // v4.1.1：query SLEEP 前置形态 + 裸 SLEEP 形态都模拟延迟
+            java.util.regex.Matcher sm = java.util.regex.Pattern
+                    .compile("sleep\\((\\d)\\)").matcher(u);
+            if (u.contains("11 and") && sm.find()) {
+                int sec = Integer.parseInt(sm.group(1));
+                ms = sec * 1200L;
             }
             return resp(200, "{\"ok\":true}", ms);
         };

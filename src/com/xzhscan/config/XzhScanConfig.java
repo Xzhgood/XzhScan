@@ -90,6 +90,16 @@ public final class XzhScanConfig {
      * 取值 2-10；调低会明显增加误报，调高会显著变慢。
      */
     public int timeDelaySeconds = 5;
+    /**
+     * v4.1.1：时间探针分级。1=仅每 DBMS 首条核心探针（默认，快）；2=全量家族与变体。
+     * 慢站耗时主要由探针数量 × 单条响应时间决定，默认 1 可把最坏耗时压到 1/5。
+     */
+    public int timeProbeLevel = 1;
+    /**
+     * v4.1.1：单请求进入时间模块的参数上限（默认 5）。右键"全部参数"时，
+     * 超出配额的参数仍跑报错/布尔模块，仅跳过时间模块（最慢的一段）。
+     */
+    public int maxTimeParamsPerRequest = 5;
     /** 每个候选验证的最长耗时（ms）。S=5 时快探全量约 130s + 三级阶梯 11s，默认放到 300s。 */
     public long verifyTimeoutMs = 300_000;
     public boolean reportWafBlocked = true;
@@ -152,6 +162,8 @@ public final class XzhScanConfig {
         c.weightContentDiff = weightContentDiff;
         c.allowTimeBasedProbe = allowTimeBasedProbe;
         c.timeDelaySeconds = timeDelaySeconds;
+        c.timeProbeLevel = timeProbeLevel;
+        c.maxTimeParamsPerRequest = maxTimeParamsPerRequest;
         c.verifyTimeoutMs = verifyTimeoutMs;
         c.reportWafBlocked = reportWafBlocked;
         c.requireInScope = requireInScope;

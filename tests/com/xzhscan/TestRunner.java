@@ -6,7 +6,7 @@ public final class TestRunner {
     public static void main(String[] args) {
         // v3.5：Test14（被动时间探针）/Test25（phase1TimeRules 上下文适配）随子系统移除；
         // 保留历史编号不重排（suite 号 = 版本史索引）。
-        int[] order = args.length > 0 ? indices(args) : new int[]{1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38};
+        int[] order = args.length > 0 ? indices(args) : new int[]{1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39};
         int failures = 0;
         for (int n : order) {
             failures += switch (n) {
@@ -45,6 +45,7 @@ public final class TestRunner {
                 case 36 -> MiniTest.runSuite("Test36: UI交互回归", Test36UiInteraction::run);
                 case 37 -> MiniTest.runSuite("Test37: sqlmap注入模型", Test37SqlmapModel::run);
                 case 38 -> MiniTest.runSuite("Test38: 安全默认", Test38SecurityDefaults::run);
+                case 39 -> MiniTest.runSuite("Test39: 耗时预算", Test39TimeBudget::run);
                 default -> throw new IllegalArgumentException("unknown test " + n);
             };
         }

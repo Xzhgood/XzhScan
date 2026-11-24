@@ -56,6 +56,8 @@ public final class ConfigCodec {
         m.put("jsonStrictValidation", String.valueOf(c.jsonStrictValidation));
         m.put("allowTimeBasedProbe", String.valueOf(c.allowTimeBasedProbe));
         m.put("timeDelaySeconds", String.valueOf(c.timeDelaySeconds));
+        m.put("timeProbeLevel", String.valueOf(c.timeProbeLevel));
+        m.put("maxTimeParamsPerRequest", String.valueOf(c.maxTimeParamsPerRequest));
         m.put("denyWriteLookingEndpoints", String.valueOf(c.denyWriteLookingEndpoints));
         m.put("baselineSamples", String.valueOf(c.baselineSamples));
         m.put("maxConcurrentScans", String.valueOf(c.maxConcurrentScans));
@@ -108,6 +110,9 @@ public final class ConfigCodec {
                 case "jsonStrictValidation" -> c.jsonStrictValidation = Boolean.parseBoolean(v);
                 case "allowTimeBasedProbe" -> c.allowTimeBasedProbe = Boolean.parseBoolean(v);
                 case "timeDelaySeconds" -> c.timeDelaySeconds = parseInt(v, c.timeDelaySeconds, 2, 10);
+                case "timeProbeLevel" -> c.timeProbeLevel = parseInt(v, c.timeProbeLevel, 1, 2);
+                case "maxTimeParamsPerRequest" -> c.maxTimeParamsPerRequest =
+                        parseInt(v, c.maxTimeParamsPerRequest, 1, 30);
                 case "denyWriteLookingEndpoints" -> c.denyWriteLookingEndpoints = Boolean.parseBoolean(v);
                 case "baselineSamples" -> c.baselineSamples = parseInt(v, c.baselineSamples, 2, 6);
                 case "maxConcurrentScans" -> c.maxConcurrentScans = parseInt(v, c.maxConcurrentScans, 1, 8);

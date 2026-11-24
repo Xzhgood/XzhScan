@@ -61,6 +61,14 @@ public final class SqlVerificationEngine {
     private final ThreadLocal<List<String>> evidenceCollector = new ThreadLocal<>();
     /** 验证预算截止时间（ThreadLocal）。 */
     private final ThreadLocal<Long> deadline = new ThreadLocal<>();
+    /** v4.1.1（P0-3）：本次扫描已发送 payload 指纹集——跨模块/跨 payload 集去重，
+     *  同一最终请求只发一次（QUICK 与 sqlmap 集重叠时就靠它兜住）。 */
+    private final ThreadLocal<java.util.Set<String>> sentFingerprints =
+            ThreadLocal.withInitial(java.util.HashSet::new);
+    /** 上一次 sendMutated 是否因"指纹重复"而跳过（区分重复与超时/失败）。 */
+    private final ThreadLocal<Boolean> lastSkipDuplicate = ThreadLocal.withInitial(() -> false);
+    /** v4.1.1（P1-3）：时间模块独立预算截止点（占 verifyTimeoutMs 的 55%）。 */
+    private final ThreadLocal<Long> timeDeadline = new ThreadLocal<>();
 
     public SqlVerificationEngine(XzhScanConfig config, Transport transport, EvidenceStore evidence) {
         this.config = config;
@@ -154,6 +162,27 @@ public final class SqlVerificationEngine {
     }
 
     /** 验证预算（§16 超时保留）：超出 config.verifyTimeoutMs 停止后续探针。 */
+    /**
+     * v4.1.1（P0-3）：时间探针枚举去重——同一 (方法,URL,body) 在一次扫描内只发一次。
+     * 只用于探针枚举（QUICK 与 sqlmap 集存在重叠 payload），不用于复验/阶梯。
+     *
+     * @return true=首次出现（应发送），false=重复（跳过）
+     */
+    private boolean probeFingerprint(String templateKey) {
+        return sentFingerprints.get().add(templateKey);
+    }
+
+    /** v4.1.1：时间模块专用预算（全局预算与 55% 切分的较小者）。 */
+    private boolean timeBudgetLeft() {
+        Long tdl = timeDeadline.get();
+        long limit = tdl == null ? Long.MAX_VALUE : tdl;
+        Long gd = deadline.get();
+        if (gd != null) {
+            limit = Math.min(limit, gd);
+        }
+        return System.currentTimeMillis() < limit;
+    }
+
     private boolean budgetLeft() {
         Long dl = deadline.get();
         return dl == null || System.currentTimeMillis() < dl;
@@ -165,6 +194,11 @@ public final class SqlVerificationEngine {
 
     private void verify0(DifferentialCandidate candidate, VerificationResult result) {
         deadline.set(result.startedAt + config.verifyTimeoutMs);
+        // v4.1.1（P1-3）：时间模块单独预算（55%）——防止快探把全局预算耗尽后
+        // 交叉验证/阶梯静默跳过（旧实现按列表顺序耗尽，后面的阶段永远没机会）。
+        timeDeadline.set(result.startedAt + config.verifyTimeoutMs * 55 / 100);
+        sentFingerprints.get().clear();
+        lastSkipDuplicate.set(false);
         RawRequest base = candidate.originalRequest;
 
         // 定位目标参数（用第一阶段同款提取，保证路径/同名序号语义一致）
@@ -265,13 +299,15 @@ public final class SqlVerificationEngine {
                 Optional<InjectionFinding> f2 = orderBoolError(base, target, baselineBody, waf, url, result);
                 f = isConfirmed(f2) ? f2 : (f.isPresent() ? f : f2);
             }
-            if (!isConfirmed(f) && budgetLeft() && config.allowTimeBasedProbe) {
+            if (!isConfirmed(f) && timeBudgetLeft() && config.allowTimeBasedProbe
+                    && !candidate.timeModuleSkipped) {
                 // v3.4.2：timeBased 全集枚举（QUICK+变体/ORDER/NUMERIC → ≥850ms → 3-tier）
                 Optional<InjectionFinding> f2 = verifyTimeBased(base, target, waf, url, mean, std,
                         sleepSeconds, result, hint);
                 f = isConfirmed(f2) ? f2 : (f.isPresent() ? f : f2);
             }
-            if (!isConfirmed(f) && budgetLeft() && config.allowTimeBasedProbe) {
+            if (!isConfirmed(f) && timeBudgetLeft() && config.allowTimeBasedProbe
+                    && !candidate.timeModuleSkipped) {
                 // v4.0：sqlmap 注入模型（boundary + clause 解耦 + 条件对）——
                 // 覆盖旧 payload 集够不着的注入上下文（数字型/嵌套引号/双层括号/补全闭合）
                 Optional<InjectionFinding> f2 = verifySqlmapTime(base, target, waf, url, mean, std,
@@ -351,6 +387,9 @@ public final class SqlVerificationEngine {
         if (!m.success) {
             return null;
         }
+        // v4.1.1（P0-3）：指纹去重只在时间探针枚举内生效（见 probeFingerprint），
+        // 此处不做全局去重——布尔复验/三级阶梯/交叉验证重试都需要重发同一请求。
+        lastSkipDuplicate.set(false);
         long t0 = System.currentTimeMillis();
         RawResponse r;
         try {
@@ -798,54 +837,91 @@ public final class SqlVerificationEngine {
                                                           com.xzhscan.model.Models.ParameterIdentity target,
                                                           WafWatch waf, String url, double mean, double std,
                                                           int sleepSeconds, VerificationResult result, String hint) {
-        // 1) 候选构建（固定顺序：QUICK + '+'变体 → ORDER(按参数名) → XRAY_NUMERIC）
+        // 1) 候选构建（v4.1.1：分级——level 1 只跑每 DBMS 首条核心探针；level 2 全量）
+        int level = Math.max(1, Math.min(2, config.timeProbeLevel));
         List<QuickProbeSpec> probes = new ArrayList<>();
+        java.util.Set<String> dbSeen = new java.util.HashSet<>();
         for (SqlPayloadLibrary.TimeProbe p : SqlPayloadLibrary.QUICK_TIME_PROBES) {
-            if (hintAllows(hint, p.db())) {
-                probes.add(new QuickProbeSpec(p.template(), p.db(), false));
+            if (!hintAllows(hint, p.db())) {
+                continue;
             }
+            // v4.1.1：level 1 按 (DBMS, 参数类型) 取首条——只按 DB 取会漏掉
+            // "数字型参数拿不到数字型探针"的情况（首条是字符型）。
+            if (level == 1 && !dbSeen.add(p.db() + "|" + p.ctx())) {
+                continue;
+            }
+            probes.add(new QuickProbeSpec(p.template(), p.db(), false));
         }
-        int quickCount = probes.size();
-        for (int i = 0; i < quickCount; i++) {
-            QuickProbeSpec p = probes.get(i);
-            // v3.9.7 修复：原版变体是 template.replace(" ", "/**/")（替换**空格**）；
-            // 此前误写成替换 "+"，而 QUICK 模板全是空格形态 → 变体一条都没生成。
-            String spaced = p.template.replace(" ", "/**/");
-            String variant = spaced.equals(p.template)
-                    ? p.template.replace("+", "/**/")   // 兼容 '+' 代表空格的模板形态
-                    : spaced;
-            if (!variant.equals(p.template)) {
-                probes.add(new QuickProbeSpec(variant, p.db, p.replace));
+        if (level >= 2) {
+            int quickCount = probes.size();
+            for (int i = 0; i < quickCount; i++) {
+                QuickProbeSpec p = probes.get(i);
+                // 原版变体：template.replace(" ", "/**/")（空格→注释符）
+                String spaced = p.template.replace(" ", "/**/");
+                String variant = spaced.equals(p.template)
+                        ? p.template.replace("+", "/**/")
+                        : spaced;
+                if (!variant.equals(p.template)) {
+                    probes.add(new QuickProbeSpec(variant, p.db, p.replace));
+                }
             }
         }
         // v3.8.2 增强（有意偏离原版）：原版仅参数名命中 ORDER_NAMES 才发 ORDER 探针，
         // 漏掉"参数名不叫 order/sort 但值实际拼进 ORDER BY"的注入点。改为全参数发送——
         // 探针为拼接形态（原值+逗号子查询），在 WHERE/数字位语法错误→不命中，不产生误报，
         // 代价仅为每参数至多 5 个额外请求（命中即停）。
+        java.util.Set<String> orderSeen = new java.util.HashSet<>();
         for (SqlPayloadLibrary.XrayProbe p : SqlPayloadLibrary.XRAY_ORDER_PROBES) {
-            if (hintAllows(hint, p.db())) {
-                probes.add(new QuickProbeSpec(p.template(), p.db(), p.replace()));
+            if (!hintAllows(hint, p.db())) {
+                continue;
             }
+            if (level == 1 && !orderSeen.add(p.db())) {
+                continue;
+            }
+            probes.add(new QuickProbeSpec(p.template(), p.db(), p.replace()));
         }
+        java.util.Set<String> numSeen = new java.util.HashSet<>();
         for (SqlPayloadLibrary.XrayProbe p : SqlPayloadLibrary.XRAY_NUMERIC_PROBES) {
-            if (hintAllows(hint, p.db())) {
-                probes.add(new QuickProbeSpec(p.template(), p.db(), p.replace()));
+            if (!hintAllows(hint, p.db())) {
+                continue;
             }
+            if (level == 1 && !numSeen.add(p.db())) {
+                continue;
+            }
+            probes.add(new QuickProbeSpec(p.template(), p.db(), p.replace()));
         }
 
-        // 2) 逐条快探：耗时 ≥ 850ms 视为命中（原版阈值），随后三级复验
+        // 2) 逐条快探（v4.1.1 P1-1：逐条超时=门槛+1500ms，慢站不再傻等完整响应；
+        //    超时视为疑似命中进阶梯，连续 3 次超时判定环境不稳并放弃）
+        long fastTimeout = (long) mean + (long) sleepSeconds * 850L + 1_500L;
+        int consecutiveTimeout = 0;
         Optional<InjectionFinding> retained = Optional.empty();
         for (QuickProbeSpec p : probes) {
-            if (!budgetLeft()) {
+            if (!timeBudgetLeft()) {
                 break;
+            }
+            // v4.1.1（P0-3）：模板级去重——QUICK 与 sqlmap 集合存在最终请求完全相同的形态
+            if (!probeFingerprint(p.template)) {
+                continue;
             }
             String rendered = renderTemplate(p.template, sleepSeconds);
             String value = p.replace ? rendered : appendBase(p.template, target) + rendered;
-            RawResponse r = sendMutated(base, target, value, waf, result,
-                    (long) sleepSeconds * 12_000L + 15_000L);
-            if (r == null || r.statusCode <= 0) {
-                continue; // 构造失败/超时：不可作为延迟证据（原版 droppedVsBaseline 语义）
+            RawResponse r = sendMutated(base, target, value, waf, result, fastTimeout);
+            if (r == null) {
+                if (!lastSkipDuplicate.get()) {
+                    consecutiveTimeout++;
+                    if (consecutiveTimeout >= 3) {
+                        result.note = (result.note == null || result.note.isEmpty() ? ""
+                                : result.note + "; ") + "time-probe environment too slow (3 timeouts)";
+                        break;
+                    }
+                }
+                continue;
             }
+            if (r.statusCode <= 0) {
+                continue; // 构造失败：不可作为延迟证据
+            }
+            consecutiveTimeout = 0;
             if (SqlWafDetector.blockedVsBaseline(toSimple(r), waf.baseline) != null) {
                 continue;
             }
@@ -903,24 +979,29 @@ public final class SqlVerificationEngine {
                                                         int sleepSeconds, VerificationResult result, String hint) {
         java.util.List<com.xzhscan.vendor.sql.SqlmapTimeModel.Boundary> bounds =
                 com.xzhscan.vendor.sql.SqlmapTimeModel.boundariesFor(target.originalValue);
-        // 只取前 3 个 boundary（类型匹配的优先），否则请求数失控
-        int boundCap = Math.min(3, bounds.size());
+        // v4.1.1：分级控制 boundary 数——level 1 只试类型最匹配的第 1 个 boundary，
+        // level 2 才展开 3 个（否则 sqlmap 阶段本身就有 30+ 请求，分级形同虚设）
+        int level = Math.max(1, Math.min(2, config.timeProbeLevel));
+        int boundCap = Math.min(level == 1 ? 1 : 3, bounds.size());
         long hitFloor = (long) mean + (long) sleepSeconds * 850L;
 
         // ---------- 阶段 1：条件对（TRUE 延迟 / FALSE 不延迟） ----------
         Optional<InjectionFinding> retained = Optional.empty();
         for (com.xzhscan.vendor.sql.SqlmapTimeModel.ConditionPair pair
                 : com.xzhscan.vendor.sql.SqlmapTimeModel.CONDITION_PAIRS) {
-            if (!budgetLeft()) {
+            if (!timeBudgetLeft()) {
                 break;
             }
             if (!hintAllows(hint, pair.db())) {
                 continue;
             }
-            for (int bi = 0; bi < boundCap && budgetLeft(); bi++) {
+            for (int bi = 0; bi < boundCap && timeBudgetLeft(); bi++) {
                 com.xzhscan.vendor.sql.SqlmapTimeModel.Boundary b = bounds.get(bi);
                 String trueTpl = b.wrap(pair.trueClause());
                 String falseTpl = b.wrap(pair.falseClause());
+                if (!probeFingerprint(trueTpl)) {
+                    continue;
+                }
                 RawResponse rTrue = sendMutated(base, target,
                         com.xzhscan.vendor.sql.SqlmapTimeModel.render(trueTpl, sleepSeconds),
                         waf, result, (long) sleepSeconds * 12_000L + 15_000L);
@@ -969,17 +1050,20 @@ public final class SqlVerificationEngine {
         }
 
         // ---------- 阶段 2：boundary 枚举（快探 → 三级阶梯） ----------
-        for (int bi = 0; bi < boundCap && budgetLeft(); bi++) {
+        for (int bi = 0; bi < boundCap && timeBudgetLeft(); bi++) {
             com.xzhscan.vendor.sql.SqlmapTimeModel.Boundary b = bounds.get(bi);
             for (com.xzhscan.vendor.sql.SqlmapTimeModel.TimeClause c
                     : com.xzhscan.vendor.sql.SqlmapTimeModel.TIME_CLAUSES) {
-                if (!budgetLeft()) {
+                if (!timeBudgetLeft()) {
                     break;
                 }
                 if (!hintAllows(hint, c.db())) {
                     continue;
                 }
                 String tpl = b.wrap(c.clause());
+                if (!probeFingerprint(tpl)) {
+                    continue;
+                }
                 RawResponse r = sendMutated(base, target,
                         com.xzhscan.vendor.sql.SqlmapTimeModel.render(tpl, sleepSeconds),
                         waf, result, (long) sleepSeconds * 12_000L + 15_000L);
@@ -1002,6 +1086,40 @@ public final class SqlVerificationEngine {
                 retained = f.isPresent() ? f : retained;
                 break;  // 该 boundary 已出现延迟命中 → 直接复验，不再试同 boundary 其他子句
             }
+        }
+        // ---------- 阶段 3：独立子句（MSSQL 堆叠 / ORDER BY 逗号子查询） ----------
+        for (com.xzhscan.vendor.sql.SqlmapTimeModel.TimeClause c
+                : com.xzhscan.vendor.sql.SqlmapTimeModel.STANDALONE_CLAUSES) {
+            if (!timeBudgetLeft()) {
+                break;
+            }
+            if (!hintAllows(hint, c.db())) {
+                continue;
+            }
+            String tpl = c.clause();
+            if (!probeFingerprint(tpl)) {
+                continue;
+            }
+            RawResponse r = sendMutated(base, target,
+                    com.xzhscan.vendor.sql.SqlmapTimeModel.render(tpl, sleepSeconds),
+                    waf, result, (long) sleepSeconds * 12_000L + 15_000L);
+            if (r == null || r.statusCode <= 0) {
+                continue;
+            }
+            if (SqlWafDetector.blockedVsBaseline(toSimple(r), waf.baseline) != null
+                    || SqlWafDetector.droppedVsBaseline(toSimple(r), waf.baseline != null)) {
+                continue;
+            }
+            if (r.elapsedMs < (long) mean + (long) sleepSeconds * 850L) {
+                continue;
+            }
+            Optional<InjectionFinding> f = threeTierTemplate(tpl, c.db(), true,
+                    "sqlmap-standalone:" + c.label(), base, target, waf, url,
+                    mean, std, sleepSeconds, result, null);
+            if (f.isPresent() && f.get().verdict == VerifyVerdict.CONFIRMED) {
+                return f;
+            }
+            retained = f.isPresent() ? f : retained;
         }
         return retained;
     }

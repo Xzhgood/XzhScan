@@ -30,7 +30,7 @@ mkdir -p build/classes/META-INF/services
 # v2.2 修复：服务声明必须与现存入口类一致（历史上更名后此处仍写旧类名，
 # 导致发布 jar 在 Burp 中无法加载——发布阻断级缺陷）
 echo "com.xzhscan.burp.XzhScanExtension" > build/classes/META-INF/services/burp.api.montoya.BurpExtension
-printf 'Manifest-Version: 1.0\nImplementation-Title: XzhScan\nImplementation-Version: 4.1.0\n' > build/jar-meta/MANIFEST.MF
+printf 'Manifest-Version: 1.0\nImplementation-Title: XzhScan\nImplementation-Version: 4.2.0\n' > build/jar-meta/MANIFEST.MF
 rm -f build/XzhScan.jar
 "$JAR" cfm build/XzhScan.jar build/jar-meta/MANIFEST.MF -C build/classes .
 "$JAR" tf build/XzhScan.jar | grep -c 'class$' | xargs echo "   classes in jar:"

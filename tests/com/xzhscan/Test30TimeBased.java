@@ -56,6 +56,12 @@ public final class Test30TimeBased {
                 return resp(200, "{\"ok\":true}", ms);
             }
             Matcher m = SLEEP_NUM.matcher(u);
+            // v4.1.1：query SLEEP 形态（现在排首位）也要模拟延迟
+            if (u.contains("admin' and (select") && m.find()) {
+                int sec = Integer.parseInt(m.group(1));
+                long ms = sec == 0 ? 30 : (belowFloorMs > 0 && sec == 5 ? belowFloorMs : sec * 1200L);
+                return resp(200, "{\"ok\":true}", ms);
+            }
             if (u.contains("admin' and sleep(") && m.find()) {
                 int sec = Integer.parseInt(m.group(1));
                 long ms = sec == 0 ? 30 : (belowFloorMs > 0 && sec == 5 ? belowFloorMs : sec * 1200L);
@@ -96,7 +102,7 @@ public final class Test30TimeBased {
         // 三级使用同一模板：S=5（默认）→ sleep(0)/sleep(5)/sleep(6)
         long tiers = hit.sent.stream().filter(r -> {
             String u = ParameterExtractor.urlDecode(r.url).toLowerCase();
-            return u.contains("admin' and sleep(");
+            return u.contains("admin' and sleep(") || u.contains("admin' and (select");
         }).count();
         t.check(tiers >= 4, "quick probe + 3 tiers sent: " + tiers);
 
