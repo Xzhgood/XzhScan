@@ -1,0 +1,43 @@
+# Build output
+build/classes/
+build/test-classes/
+build/jar-meta/
+build/temp/
+*.class
+
+# Keep the final JAR
+!build/XzhScan.jar
+
+# Test files
+tests/
+
+# Logs
+*.log
+
+# Backup files
+*.backup
+*.bak
+*.tmp
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*~
+.swp
+.swo
+
+# Documentation artifacts
+docs/refactor/
+.refactor/
