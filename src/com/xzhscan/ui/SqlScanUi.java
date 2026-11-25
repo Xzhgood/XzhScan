@@ -614,13 +614,11 @@ public final class SqlScanUi {
                         if (tier == TIER_PENDING) {
                             c.setBackground(selected ? PENDING_YELLOW_SELECTED : PENDING_YELLOW);
                             c.setForeground(selected ? java.awt.Color.WHITE : java.awt.Color.BLACK);
-                        } else if (tier == TIER_REJECTED) {
-                            c.setBackground(selected ? REJECTED_GREEN_SELECTED : REJECTED_GREEN);
-                            c.setForeground(selected ? java.awt.Color.WHITE : java.awt.Color.BLACK);
                         } else if (tier == TIER_CHANGED) {
                             c.setBackground(selected ? CHANGED_RED_SELECTED : CHANGED_RED);
                             c.setForeground(selected ? java.awt.Color.WHITE : java.awt.Color.BLACK);
                         } else {
+                            // v3.9.9: 取消绿色染色，REJECTED 使用默认颜色
                             c.setBackground(selected ? table.getSelectionBackground() : table.getBackground());
                             c.setForeground(selected ? table.getSelectionForeground() : table.getForeground());
                         }
@@ -644,13 +642,11 @@ public final class SqlScanUi {
                         if (tier == TIER_PENDING) {
                             c.setBackground(selected ? PENDING_YELLOW_SELECTED : PENDING_YELLOW);
                             c.setForeground(selected ? java.awt.Color.WHITE : java.awt.Color.BLACK);
-                        } else if (tier == TIER_REJECTED) {
-                            c.setBackground(selected ? REJECTED_GREEN_SELECTED : REJECTED_GREEN);
-                            c.setForeground(selected ? java.awt.Color.WHITE : java.awt.Color.BLACK);
                         } else if (tier == TIER_CHANGED) {
                             c.setBackground(selected ? CHANGED_RED_SELECTED : CHANGED_RED);
                             c.setForeground(selected ? java.awt.Color.WHITE : java.awt.Color.BLACK);
                         } else {
+                            // v3.9.9: 取消绿色染色，REJECTED 使用默认颜色
                             c.setBackground(selected ? table.getSelectionBackground() : table.getBackground());
                             c.setForeground(selected ? table.getSelectionForeground() : table.getForeground());
                         }

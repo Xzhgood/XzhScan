@@ -104,7 +104,7 @@ public final class XzhScanConfig {
     /** Fuzz 路径静态资源后缀（逗号分隔）。 */
     public String fuzzPathStaticExts = "js,mjs,css,map,png,jpg,jpeg,gif,svg,ico,webp,bmp,woff,woff2,ttf,eot,otf,mp3,mp4,webm,avi";
     /** Fuzz 路径是否移除 Query 参数。 */
-    public boolean fuzzPathRemoveQuery = true;
+    public boolean fuzzPathRemoveQuery = false;  // 修复：默认不移除参数（保留原始 URL）
     /** Fuzz 路径是否移除 Fragment。 */
     public boolean fuzzPathRemoveFragment = true;
 

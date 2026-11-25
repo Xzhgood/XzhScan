@@ -97,12 +97,17 @@ public final class RawHttp {
             String lower = contentType.toLowerCase();
             int idx = lower.indexOf("charset=");
             if (idx < 0) return null;
+            // 从原始字符串提取（保持大小写），但索引来自小写版本
             String charset = contentType.substring(idx + 8).trim();
             int semicolon = charset.indexOf(';');
             if (semicolon > 0) {
                 charset = charset.substring(0, semicolon);
             }
-            charset = charset.replace("\"", "").trim();
+            int space = charset.indexOf(' ');
+            if (space > 0) {
+                charset = charset.substring(0, space);
+            }
+            charset = charset.replace("\"", "").replace("'", "").trim();
             return charset.isEmpty() ? null : charset;
         }
 

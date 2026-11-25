@@ -865,18 +865,25 @@ public final class SqlVerificationEngine {
             // v3.9.7 关键修复：对齐原版命中门槛 mean + S*850ms（原先只用固定 850ms）。
             // 示例：基线 200ms、S=5 → 需 ≥ 4450ms 才算命中；此前 850ms 即命中，
             // 慢查询/卡顿轻松过线，是时间盲注误报的主要来源。
-            long hitFloor = (long) mean + (long) sleepSeconds * 850L;
+            // v3.9.8 进一步修复：结合标准差模型，提高快探阈值，减少误报命中
+            long stdBasedFloor = (long)(mean + 7.0 * std);
+            long timeBasedFloor = (long) mean + (long) sleepSeconds * 1000L;  // 提高到 1000ms/秒
+            long hitFloor = Math.max(timeBasedFloor, stdBasedFloor);
             if (r.elapsedMs < hitFloor) {
                 continue;
             }
             Optional<InjectionFinding> f = threeTierTemplate(p.template, p.db, p.replace,
                     "time-quick:" + p.db, base, target, waf, url, mean, std, sleepSeconds, result, null);
             if (f.isPresent() && f.get().verdict == VerifyVerdict.CONFIRMED) {
-                return f;
+                return f;  // CONFIRMED 立即返回
             }
             retained = f.isPresent() ? f : retained;
-            // 原版命中即停（首条延迟命中后不再继续枚举）
-            break;
+            // v3.9.8 修复：只在 CONFIRMED 时才停止，SUSPECTED 或失败时继续测试下一个 payload
+            // 避免 DBMS_PIPE 等误报阻断后续真实注入的检测
+            if (f.isPresent() && f.get().verdict == VerifyVerdict.CONFIRMED) {
+                break;  // 只在确认时停止枚举
+            }
+            // 否则继续测试下一个 payload
         }
         if (retained.isEmpty() && result.timingVerdict == null) {
             result.timingVerdict = TimingVerdict.TIMING_INCONCLUSIVE;
@@ -1008,6 +1015,22 @@ public final class SqlVerificationEngine {
                 // P0-5 修正：移除响应内容一致性检查，避免动态内容导致漏报
                 // （原检查过于严格，动态时间戳/token 会导致相似度<0.95，使真实注入被终止）
                 long median = calculateMedian(samples);
+
+                // v3.9.9 关键修复：检查采样稳定性，这是从根源解决误报的核心
+                // 真实注入：sleep(5) 的 3 次采样应该稳定（标准差 < 10%）
+                // 网络抖动：响应时间波动大（标准差 > 30%），应该终止验证
+                if (sec > 0) {  // 只检查 sleep(S) 和 sleep(S+1)，不检查 sleep(0)
+                    double sampleStd = calculateStd(samples);
+                    double maxAllowedStd = sec * 300.0;  // 允许 30% 的标准差
+                    if (sampleStd > maxAllowedStd) {
+                        // 采样不稳定：标准差过大，可能是网络抖动或服务器不稳定
+                        // 示例：sleep(5) 的 3 次采样 [2000ms, 5000ms, 8000ms]，std=3000ms > 1500ms
+                        // 这种情况下即使中位数刚好符合，也可能是巧合，不应该确认为注入
+                        aborted = true;
+                        break;
+                    }
+                }
+
                 t.add(median);
             }
             if (aborted || t.size() < 3) {
@@ -1017,19 +1040,29 @@ public final class SqlVerificationEngine {
             long tS = t.get(1);
             long tS1 = t.get(2);
             // 三重判定（对齐 sqlmap 时间盲注确认逻辑，消除慢服务器/系统卡顿误报）：
-            //  1) 相对差：sleep(S) - sleep(0) >= S×1000ms（1s 映射 1s）
-            //  2) 增量差：sleep(S+1) - sleep(S) >= 1000ms（P0-3: 从 750ms 提高到 1000ms）
+            //  1) 相对差：sleep(S) - sleep(0) 应在合理范围内（±50%）
+            //  2) 增量差：sleep(S+1) - sleep(S) 应在 800-1500ms（±50%，不只检查下限）
             //  3) 绝对下限：sleep(S) >= max(minValidDelayMs, baseline均值 + 7σ)
-            //     ——P1-1: 使用 7σ 标准差模型（对齐 sqlmap），但限制上限防止极慢服务器漏报
-            boolean relativeOk  = tS - t0 >= (long) sleepSeconds * 1000L;
-            boolean incrementOk = tS1 - tS >= 1000L;  // P0-3: 750ms → 1000ms
-            // P0-7 修正：限制 absoluteFloor 上限，防止极慢服务器（mean>2s）导致漏报
-            // 即使 7σ 很大，也不应该超过 sleep 时间的 1.5 倍
+            //  v3.9.9 关键修复：检查上限和范围，不是只检查下限，避免极端波动误报
+
+            // 相对差检查：应该稳定在 sleepSeconds*1000ms 附近（允许 90%-150% 范围）
+            long relativeDelta = tS - t0;
+            long expectedDelta = (long) sleepSeconds * 1000L;
+            boolean relativeOk = relativeDelta >= expectedDelta * 9 / 10  // 至少 90%
+                                 && relativeDelta <= expectedDelta * 3 / 2;  // 最多 150%
+
+            // 增量差检查：应该稳定在 1000ms 附近（允许 800-1500ms，过滤极端波动）
+            long increment = tS1 - tS;
+            boolean incrementOk = increment >= 800L && increment <= 1500L;
+
+            // 绝对下限：使用更严格的阈值
             long stdBasedFloor = (long)(mean + 7.0 * std);
-            long maxAllowedFloor = (long)(sleepSeconds * 1000L * 1.5);  // sleep(5) → 最多 7500ms
+            long strictFloor = (long)(sleepSeconds * 1000L * 9 / 10);  // 至少 90% 的 sleep 时间
+            long maxAllowedFloor = (long)(sleepSeconds * 1000L * 15 / 10);  // 最多 150%
             long absoluteFloor = Math.max(config.minValidDelayMs,
-                                          Math.min(stdBasedFloor, maxAllowedFloor));
-            boolean absoluteOk  = tS >= absoluteFloor;
+                                          Math.max(strictFloor, Math.min(stdBasedFloor, maxAllowedFloor)));
+            boolean absoluteOk = tS >= absoluteFloor;
+
             confirmed = relativeOk && incrementOk && absoluteOk;
         }
 
@@ -1181,6 +1214,28 @@ public final class SqlVerificationEngine {
         List<Long> sorted = new ArrayList<>(values);
         java.util.Collections.sort(sorted);
         return sorted.get(sorted.size() / 2);
+    }
+
+    /**
+     * v3.9.9: 计算标准差（用于检测采样稳定性）。
+     */
+    private static double calculateStd(List<Long> values) {
+        if (values == null || values.size() < 2) {
+            return 0.0;
+        }
+        double mean = 0.0;
+        for (Long v : values) {
+            mean += v;
+        }
+        mean /= values.size();
+
+        double variance = 0.0;
+        for (Long v : values) {
+            double diff = v - mean;
+            variance += diff * diff;
+        }
+        variance /= (values.size() - 1);  // Bessel's correction
+        return Math.sqrt(variance);
     }
 
     /**

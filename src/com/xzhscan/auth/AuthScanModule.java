@@ -207,6 +207,12 @@ public final class AuthScanModule {
     }
 
     private void emitResult(PermResult r) {
+        // v3.9.8 修复：只报告确认和可疑的越权，过滤掉无鉴权、安全和无效结果
+        // 避免将非漏洞（如公开接口、鉴权正常）误报为越权
+        if (r.verdict != AuthScanEngine.Verdict.CONFIRMED
+            && r.verdict != AuthScanEngine.Verdict.SUSPECTED) {
+            return;  // 不报告 UNAUTHORIZED、SAFE、INVALID
+        }
         Callback cb = callback.get();
         if (cb != null) {
             cb.onResult(r);
