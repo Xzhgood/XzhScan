@@ -129,21 +129,12 @@ public final class AuthScanRequestFilter {
      * @param requestId         请求标识
      * @param method            HTTP 方法
      * @param url               完整 URL
-     * @param statusCode        原始响应状态码
      * @param responseHeaders   观测响应头（小写键 -> 值；无响应传 null/空）
      * @param acceptHeader      请求 Accept 头（可空）
      */
     public FilterRecord evaluate(String requestId, String method, String url,
-                                 int statusCode,
                                  Map<String, String> responseHeaders, String acceptHeader) {
         String m = method == null ? "GET" : method.toUpperCase(Locale.ROOT);
-
-        // 0) 状态码硬准入：只允许 200（任务追加审计要求）
-        if (statusCode != 200) {
-            return rec(requestId, m, url, "non-200", "", Decision.REJECT,
-                    "原始响应状态码 " + statusCode + " ≠ 200，不进入越权审计");
-        }
-
         Map<String, String> headers = responseHeaders == null ? Map.of() : responseHeaders;
         String contentType = orEmpty(headers.get("content-type"));
         String disposition = orEmpty(headers.get("content-disposition"));

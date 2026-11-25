@@ -71,7 +71,8 @@ public final class TrafficListener implements HttpHandler, ContextMenuItemsProvi
         try {
             ToolType tool = responseReceived.toolSource().toolType();
             // v3.9.3 分诊：首条 Intruder 流量自报开关状态——watchIntruder=false 一眼定位
-            if (tool == ToolType.INTRUDER && intruderDiagLogged.compareAndSet(0, 1)) {
+            // v4.0.1：第一阶段总开关关闭时完全静默（不输出任何 XzhScan 日志）
+            if (tool == ToolType.INTRUDER && config.phase1Enabled && intruderDiagLogged.compareAndSet(0, 1)) {
                 api.logging().logToOutput("[XzhScan][Intruder] 检测到 Intruder 流量（watchIntruder="
                         + config.watchIntruder + ", phase1Enabled=" + config.phase1Enabled
                         + ", statusCode=" + responseReceived.statusCode()
@@ -79,7 +80,7 @@ public final class TrafficListener implements HttpHandler, ContextMenuItemsProvi
             }
             // v3.9.3：开关关闭期间 5 秒一条持续提醒（勾选+应用后此日志自动消失，
             // 取而代之的是「200 响应已提交差分扫描」）——不再一次性静默误导排障
-            if (tool == ToolType.INTRUDER && !config.watchIntruder) {
+            if (tool == ToolType.INTRUDER && config.phase1Enabled && !config.watchIntruder) {
                 long prev = intruderOffLogAt.get();
                 long now = System.currentTimeMillis();
                 if (now - prev >= 5000
@@ -91,7 +92,7 @@ public final class TrafficListener implements HttpHandler, ContextMenuItemsProvi
             boolean watched = sqlScanWants(config, tool, responseReceived.statusCode());
             // v3.9：Intruder 开关开启但响应非 200 —— 显式跳过日志（任务要求可区分非 200 跳过）。
             // Intruder 源于爆破场景可能高频，日志只进 Burp Output，不刷 UI。
-            if (!watched && tool == ToolType.INTRUDER && config.watchIntruder) {
+            if (!watched && tool == ToolType.INTRUDER && config.phase1Enabled && config.watchIntruder) {
                 api.logging().logToOutput("[XzhScan][Intruder] 跳过非200响应（" + responseReceived.statusCode() + "）");
             }
             RawRequest raw = null;
@@ -154,21 +155,29 @@ public final class TrafficListener implements HttpHandler, ContextMenuItemsProvi
             return items;
         }
         // v3.0：整包被动初筛（原 Send to XzhScan，按用户命名改为 sqltest）
-        JMenuItem send = new JMenuItem("Send to XzhScan sqltest");
-        send.addActionListener(e -> {
-            try {
-                burp.api.montoya.http.message.HttpRequestResponse rr = pick(event);
-                if (rr == null) {
-                    return;
+        // v4.0.1：第一阶段总开关关闭时不提供该入口
+        if (config.phase1Enabled) {
+            JMenuItem send = new JMenuItem("Send to XzhScan sqltest");
+            send.addActionListener(e -> {
+                try {
+                    burp.api.montoya.http.message.HttpRequestResponse rr = pick(event);
+                    if (rr == null) {
+                        return;
+                    }
+                    RawRequest raw = toRawRequest(rr.request());
+                    RawResponse observed = rr.response() == null ? null : toRawResponse(rr);
+                    orchestrator.submit(raw, observed, "Manual", dispatcher);
+                } catch (Throwable t) {
+                    api.logging().logToError("[XzhScan] manual send error: " + t);
                 }
-                RawRequest raw = toRawRequest(rr.request());
-                RawResponse observed = rr.response() == null ? null : toRawResponse(rr);
-                orchestrator.submit(raw, observed, "Manual", dispatcher);
-            } catch (Throwable t) {
-                api.logging().logToError("[XzhScan] manual send error: " + t);
-            }
-        });
-        items.add(send);
+            });
+            items.add(send);
+        }
+
+        // v4.0.1：第二阶段总开关关闭时不提供右键人工验证入口（勾选并应用后出现）
+        if (!config.phase2Enabled) {
+            return items;
+        }
 
         // v3.0 核心入口：右键找到包 -> 全部参数全模块验证 或 指定参数验证（全模块序列）
         try {
@@ -313,30 +322,36 @@ public final class TrafficListener implements HttpHandler, ContextMenuItemsProvi
         private volatile ScanOrchestrator.HostCallback delegate;
         private final java.util.ArrayDeque<Runnable> pending = new java.util.ArrayDeque<>();
 
-        synchronized void bind(ScanOrchestrator.HostCallback cb) {
-            this.delegate = cb;
-            Runnable r;
-            while ((r = pending.poll()) != null) {
-                r.run(); // 回放暂存事件
+        void bind(ScanOrchestrator.HostCallback cb) {
+            java.util.List<Runnable> replay = new java.util.ArrayList<>();
+            synchronized (this) {
+                this.delegate = cb;
+                while (!pending.isEmpty()) {
+                    replay.add(pending.poll());
+                }
+            }
+            // v3.10.5：锁外回放，避免持锁执行 UI 回调（原实现可能阻塞扫描线程）
+            for (Runnable r : replay) {
+                r.run();
             }
         }
 
         private void dispatch(Runnable event) {
-            ScanOrchestrator.HostCallback d = delegate;
-            if (d != null) {
+            if (delegate != null) {
                 event.run();
                 return;
             }
             synchronized (this) {
-                if (delegate != null) {
-                    event.run();
+                if (delegate == null) {
+                    if (pending.size() < PENDING_LIMIT) {
+                        pending.add(event);
+                    }
+                    // 超限丢弃：宁丢事件不积压内存
                     return;
                 }
-                if (pending.size() < PENDING_LIMIT) {
-                    pending.add(event);
-                }
-                // 超限丢弃：宁丢事件不积压内存
             }
+            // bind 恰好发生在检查之后：锁外执行，避免持锁回调
+            event.run();
         }
 
         @Override
@@ -362,6 +377,16 @@ public final class TrafficListener implements HttpHandler, ContextMenuItemsProvi
         @Override
         public void onVerification(com.xzhscan.model.Models.VerificationResult r) {
             dispatch(() -> delegate.onVerification(r));
+        }
+
+        @Override
+        public void onVerifyQueued(com.xzhscan.model.Models.DifferentialCandidate c) {
+            dispatch(() -> delegate.onVerifyQueued(c));
+        }
+
+        @Override
+        public void onVerifyStarted(com.xzhscan.model.Models.DifferentialCandidate c) {
+            dispatch(() -> delegate.onVerifyStarted(c));
         }
 
         @Override

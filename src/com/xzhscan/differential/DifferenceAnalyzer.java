@@ -102,10 +102,10 @@ public final class DifferenceAnalyzer {
         ev.timingDeltaMs = mutated.elapsedMs - (long) baseline.meanElapsed;
         double sigma = Math.max(baseline.stdElapsed, 25.0); // 下限 25ms：避免零抖动时小差也算多σ
         ev.timingSigma = ev.timingDeltaMs / sigma;
-        // 异常判据：偏差同时满足幅度（>=800ms）与稳定性（>=系数σ，v3.10.0: 可配置，默认 5σ）。
+        // 异常判据：偏差同时满足幅度（>=800ms）与稳定性（>=3σ）。
         // 单次时间异常只作为证据保留，不据此判定漏洞或单独触发复检（任务书 3.2-6）。
         boolean amplitude = Math.abs(ev.timingDeltaMs) >= 800;
-        boolean stable = Math.abs(ev.timingSigma) >= config.timingStdCoeff;  // v3.10.0: 使用配置值
+        boolean stable = Math.abs(ev.timingSigma) >= 3.0;
         ev.timingAnomaly = amplitude && stable;
         if (ev.timingAnomaly) {
             ev.timingNote = "timing anomaly preserved: Δ=" + ev.timingDeltaMs + "ms ("

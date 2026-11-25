@@ -185,20 +185,16 @@ public final class SqlVerificationEngine {
         }
 
         // 基线：原始请求 N 次（时间统计 + WAF 基线 + 内容稳定性评估）
-        // v3.10.0 修复：统一使用传输层时间（r.elapsedMs），与第一阶段和三级阶梯一致
-        // P0-1: 增加基线样本数到 5-7（对齐 sqlmap 统计要求）
         List<Long> timings = new ArrayList<>();
         List<String> baselineBodies = new ArrayList<>();
         SimpleHttpResponse baselineResp = null;
         RawResponse baselineRaw = null;
-        int samples = Math.max(5, Math.min(7, config.baselineSamples));
+        int samples = Math.max(2, Math.min(3, config.baselineSamples));
         for (int i = 0; i < samples; i++) {
+            long t0 = System.currentTimeMillis();
             RawResponse r = send(base);
+            timings.add(System.currentTimeMillis() - t0);
             if (r != null) {
-                // 使用传输层时间，确保与变异请求时间测量一致
-                if (r.elapsedMs >= 0) {
-                    timings.add(r.elapsedMs);
-                }
                 baselineResp = toSimple(r);
                 baselineRaw = r;
                 baselineBodies.add(r.bodyAsString());
@@ -213,20 +209,8 @@ public final class SqlVerificationEngine {
         collect(evidence.put("verify-baseline", base, baselineRaw));
         result.probeCount += samples;
 
-        // P0-7: 异常值检测（IQR 方法），移除明显异常的响应时间
-        List<Long> filteredTimings = removeOutliers(timings);
-        // 如果过滤后样本太少，回退到原始样本（避免过度过滤）
-        if (filteredTimings.size() < 3) {
-            filteredTimings = timings;
-        }
-
-        // v3.10.0 修复：使用样本标准差（n-1）而非总体标准差（n），在小样本时更准确
-        double mean = filteredTimings.stream().mapToLong(Long::longValue).average().orElse(0);
-        int n = filteredTimings.size();
-        double variance = filteredTimings.stream()
-                .mapToDouble(x -> (x - mean) * (x - mean))
-                .sum() / Math.max(1, n - 1);  // 样本标准差：除以 n-1（Bessel's correction）
-        double std = Math.sqrt(variance);
+        double mean = timings.stream().mapToLong(Long::longValue).average().orElse(0);
+        double std = Math.sqrt(timings.stream().mapToDouble(x -> (x - mean) * (x - mean)).average().orElse(0));
         long timeThreshold = (long) (mean + 3.0 * Math.max(std, 30.0) + 1500.0);
         // v3.9.7：延迟秒数改用配置值（默认 5）。原版按基线浮动 2/3 秒——实测
         // 2-3 秒落在系统卡顿/负载抖动的抖动带内，是时间盲注误报的主要来源。
@@ -291,8 +275,9 @@ public final class SqlVerificationEngine {
             case ERROR_CANDIDATE -> {
                 // 错误型模块：heuristic（引号噪声，含原值）+ errConfirm（md5 回显）+ 裸表达式
                 f = heuristic(base, target, SqlPayloadLibrary.detectError(baselineBody) != null, waf, hint, url, result);
-                if (f.isEmpty() && budgetLeft()) {
-                    f = errConfirm(base, target, waf, hint, url, result);
+                if (!isConfirmed(f) && budgetLeft()) {
+                    Optional<InjectionFinding> f2 = errConfirm(base, target, waf, hint, url, result);
+                    f = isConfirmed(f2) ? f2 : (f.isPresent() ? f : f2);
                 }
             }
             case TIME_CANDIDATE -> {
@@ -301,12 +286,15 @@ public final class SqlVerificationEngine {
             }
             case BOOLEAN_CANDIDATE -> {
                 // 布尔差分模块：castBool / boolPair / orderBoolError
+                // v3.10.5：SUSPECTED/RETAINED 继续试更强模块，仅 CONFIRMED 短路
                 f = castBool(base, target, baselineBody, waf, hint, url, baselineStable, result);
-                if (f.isEmpty() && budgetLeft()) {
-                    f = boolPair(base, target, baselineBody, waf, url, baselineStable, result);
+                if (!isConfirmed(f) && budgetLeft()) {
+                    Optional<InjectionFinding> f2 = boolPair(base, target, baselineBody, waf, url, baselineStable, result);
+                    f = isConfirmed(f2) ? f2 : (f.isPresent() ? f : f2);
                 }
-                if (f.isEmpty() && budgetLeft()) {
-                    f = orderBoolError(base, target, baselineBody, waf, url, result);
+                if (!isConfirmed(f) && budgetLeft()) {
+                    Optional<InjectionFinding> f2 = orderBoolError(base, target, baselineBody, waf, url, result);
+                    f = isConfirmed(f2) ? f2 : (f.isPresent() ? f : f2);
                 }
             }
         }
@@ -865,25 +853,18 @@ public final class SqlVerificationEngine {
             // v3.9.7 关键修复：对齐原版命中门槛 mean + S*850ms（原先只用固定 850ms）。
             // 示例：基线 200ms、S=5 → 需 ≥ 4450ms 才算命中；此前 850ms 即命中，
             // 慢查询/卡顿轻松过线，是时间盲注误报的主要来源。
-            // v3.9.8 进一步修复：结合标准差模型，提高快探阈值，减少误报命中
-            long stdBasedFloor = (long)(mean + 7.0 * std);
-            long timeBasedFloor = (long) mean + (long) sleepSeconds * 1000L;  // 提高到 1000ms/秒
-            long hitFloor = Math.max(timeBasedFloor, stdBasedFloor);
+            long hitFloor = (long) mean + (long) sleepSeconds * 850L;
             if (r.elapsedMs < hitFloor) {
                 continue;
             }
             Optional<InjectionFinding> f = threeTierTemplate(p.template, p.db, p.replace,
                     "time-quick:" + p.db, base, target, waf, url, mean, std, sleepSeconds, result, null);
             if (f.isPresent() && f.get().verdict == VerifyVerdict.CONFIRMED) {
-                return f;  // CONFIRMED 立即返回
+                return f;
             }
             retained = f.isPresent() ? f : retained;
-            // v3.9.8 修复：只在 CONFIRMED 时才停止，SUSPECTED 或失败时继续测试下一个 payload
-            // 避免 DBMS_PIPE 等误报阻断后续真实注入的检测
-            if (f.isPresent() && f.get().verdict == VerifyVerdict.CONFIRMED) {
-                break;  // 只在确认时停止枚举
-            }
-            // 否则继续测试下一个 payload
+            // v3.10.1：SUSPECTED/RETAINED 不阻断后续 payload（DBMS_PIPE 等误报
+            // 曾导致首条弱命中即停），继续枚举直到 CONFIRMED（上面的 return）或跑完。
         }
         if (retained.isEmpty() && result.timingVerdict == null) {
             result.timingVerdict = TimingVerdict.TIMING_INCONCLUSIVE;
@@ -972,7 +953,6 @@ public final class SqlVerificationEngine {
                                                          int sleepSeconds, VerificationResult result,
                                                          DiffEvidence quick) {
         // 三级阶梯：sleep(0) → sleep(S) → sleep(S+1)，相对差分（S 由基线速度决定，§10 模型）
-        // P0-4: 每个级别测 3 次取中位数，降低瞬时波动影响
         boolean confirmed = false;
         boolean sawTimeout = false;
         List<Long> t = new ArrayList<>(3);
@@ -982,56 +962,23 @@ public final class SqlVerificationEngine {
             for (int sec : new int[]{0, sleepSeconds, sleepSeconds + 1}) {
                 String rendered = renderTemplate(template, sec);
                 String payload = replace ? rendered : appendBase(template, target) + rendered;
-
-                // P0-4: 每个级别测 3 次，收集时间和响应体
-                List<Long> samples = new ArrayList<>();
-                List<String> bodies = new ArrayList<>();
-                for (int i = 0; i < 3; i++) {
-                    // 逐行放大预算：sec 秒 × 行数未知 → sec×12s+15s（与第一阶段同策略）
-                    RawResponse r = sendMutated(base, target, payload, waf, result,
-                            (long) sec * 12_000L + 15_000L);
-                    if (r == null) {
-                        aborted = true;
-                        break;
-                    }
-                    if (r.statusCode <= 0) {
-                        sawTimeout = true;
-                        aborted = true;
-                        break;
-                    }
-                    if (SqlWafDetector.blockedVsBaseline(toSimple(r), waf.baseline) != null) {
-                        aborted = true;
-                        break;
-                    }
-                    samples.add(r.elapsedMs);
-                    bodies.add(r.bodyAsString());
-                }
-
-                if (aborted || samples.isEmpty()) {
+                // 逐行放大预算：sec 秒 × 行数未知 → sec×12s+15s（与第一阶段同策略）
+                RawResponse r = sendMutated(base, target, payload, waf, result,
+                        (long) sec * 12_000L + 15_000L);
+                if (r == null) {
+                    aborted = true;
                     break;
                 }
-
-                // P0-4: 取中位数作为该级别的代表时间（降低瞬时波动影响）
-                // P0-5 修正：移除响应内容一致性检查，避免动态内容导致漏报
-                // （原检查过于严格，动态时间戳/token 会导致相似度<0.95，使真实注入被终止）
-                long median = calculateMedian(samples);
-
-                // v3.9.9 关键修复：检查采样稳定性，这是从根源解决误报的核心
-                // 真实注入：sleep(5) 的 3 次采样应该稳定（标准差 < 10%）
-                // 网络抖动：响应时间波动大（标准差 > 30%），应该终止验证
-                if (sec > 0) {  // 只检查 sleep(S) 和 sleep(S+1)，不检查 sleep(0)
-                    double sampleStd = calculateStd(samples);
-                    double maxAllowedStd = sec * 300.0;  // 允许 30% 的标准差
-                    if (sampleStd > maxAllowedStd) {
-                        // 采样不稳定：标准差过大，可能是网络抖动或服务器不稳定
-                        // 示例：sleep(5) 的 3 次采样 [2000ms, 5000ms, 8000ms]，std=3000ms > 1500ms
-                        // 这种情况下即使中位数刚好符合，也可能是巧合，不应该确认为注入
-                        aborted = true;
-                        break;
-                    }
+                if (r.statusCode <= 0) {
+                    sawTimeout = true;
+                    aborted = true;
+                    break;
                 }
-
-                t.add(median);
+                if (SqlWafDetector.blockedVsBaseline(toSimple(r), waf.baseline) != null) {
+                    aborted = true;
+                    break;
+                }
+                t.add(r.elapsedMs);
             }
             if (aborted || t.size() < 3) {
                 continue;
@@ -1039,31 +986,8 @@ public final class SqlVerificationEngine {
             long t0 = t.get(0);
             long tS = t.get(1);
             long tS1 = t.get(2);
-            // 三重判定（对齐 sqlmap 时间盲注确认逻辑，消除慢服务器/系统卡顿误报）：
-            //  1) 相对差：sleep(S) - sleep(0) 应在合理范围内（±50%）
-            //  2) 增量差：sleep(S+1) - sleep(S) 应在 800-1500ms（±50%，不只检查下限）
-            //  3) 绝对下限：sleep(S) >= max(minValidDelayMs, baseline均值 + 7σ)
-            //  v3.9.9 关键修复：检查上限和范围，不是只检查下限，避免极端波动误报
-
-            // 相对差检查：应该稳定在 sleepSeconds*1000ms 附近（允许 90%-150% 范围）
-            long relativeDelta = tS - t0;
-            long expectedDelta = (long) sleepSeconds * 1000L;
-            boolean relativeOk = relativeDelta >= expectedDelta * 9 / 10  // 至少 90%
-                                 && relativeDelta <= expectedDelta * 3 / 2;  // 最多 150%
-
-            // 增量差检查：应该稳定在 1000ms 附近（允许 800-1500ms，过滤极端波动）
-            long increment = tS1 - tS;
-            boolean incrementOk = increment >= 800L && increment <= 1500L;
-
-            // 绝对下限：使用更严格的阈值
-            long stdBasedFloor = (long)(mean + 7.0 * std);
-            long strictFloor = (long)(sleepSeconds * 1000L * 9 / 10);  // 至少 90% 的 sleep 时间
-            long maxAllowedFloor = (long)(sleepSeconds * 1000L * 15 / 10);  // 最多 150%
-            long absoluteFloor = Math.max(config.minValidDelayMs,
-                                          Math.max(strictFloor, Math.min(stdBasedFloor, maxAllowedFloor)));
-            boolean absoluteOk = tS >= absoluteFloor;
-
-            confirmed = relativeOk && incrementOk && absoluteOk;
+            // 相对差分判定（不叠加绝对阈值）：S 级延迟与 (S+1)-S 增量都须超过抗抖动下限
+            confirmed = tS - t0 >= sleepSeconds * 750L && tS1 - tS >= 500L;
         }
 
         String renderedShown = renderTemplate(template, sleepSeconds);
@@ -1176,86 +1100,6 @@ public final class SqlVerificationEngine {
             out.add(m.group());
         }
         return out;
-    }
-
-    /**
-     * P0-7: 异常值检测（IQR 方法）。
-     * 移除超出 [Q1-1.5*IQR, Q3+1.5*IQR] 范围的异常值。
-     * 样本少于 4 个时不检测。
-     */
-    private static List<Long> removeOutliers(List<Long> values) {
-        if (values == null || values.size() < 4) {
-            return values;
-        }
-        List<Long> sorted = new ArrayList<>(values);
-        java.util.Collections.sort(sorted);
-
-        int q1Idx = sorted.size() / 4;
-        int q3Idx = sorted.size() * 3 / 4;
-        long q1 = sorted.get(q1Idx);
-        long q3 = sorted.get(q3Idx);
-        long iqr = q3 - q1;
-
-        long lowerBound = q1 - (long)(iqr * 1.5);
-        long upperBound = q3 + (long)(iqr * 1.5);
-
-        return values.stream()
-                .filter(v -> v >= lowerBound && v <= upperBound)
-                .collect(java.util.stream.Collectors.toList());
-    }
-
-    /**
-     * P0-4: 计算中位数。
-     */
-    private static long calculateMedian(List<Long> values) {
-        if (values == null || values.isEmpty()) {
-            return 0;
-        }
-        List<Long> sorted = new ArrayList<>(values);
-        java.util.Collections.sort(sorted);
-        return sorted.get(sorted.size() / 2);
-    }
-
-    /**
-     * v3.9.9: 计算标准差（用于检测采样稳定性）。
-     */
-    private static double calculateStd(List<Long> values) {
-        if (values == null || values.size() < 2) {
-            return 0.0;
-        }
-        double mean = 0.0;
-        for (Long v : values) {
-            mean += v;
-        }
-        mean /= values.size();
-
-        double variance = 0.0;
-        for (Long v : values) {
-            double diff = v - mean;
-            variance += diff * diff;
-        }
-        variance /= (values.size() - 1);  // Bessel's correction
-        return Math.sqrt(variance);
-    }
-
-    /**
-     * P0-5: 响应内容一致性检查。
-     * 检查多个响应体是否足够相似（相似度 >= 0.95）。
-     */
-    private static boolean checkContentConsistency(List<String> bodies) {
-        if (bodies == null || bodies.size() < 2) {
-            return true;
-        }
-        // 两两比较，所有相似度必须 >= 0.95
-        for (int i = 0; i < bodies.size(); i++) {
-            for (int j = i + 1; j < bodies.size(); j++) {
-                double similarity = sim(bodies.get(i), bodies.get(j));
-                if (similarity < 0.95) {
-                    return false;
-                }
-            }
-        }
-        return true;
     }
 
     private void collect(String evidenceId) {

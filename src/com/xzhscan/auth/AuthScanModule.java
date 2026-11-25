@@ -37,7 +37,8 @@ public final class AuthScanModule {
     private final ThreadPoolExecutor executor;
     private final AtomicInteger seq = new AtomicInteger();
     private final AtomicReference<Callback> callback = new AtomicReference<>();
-    private volatile boolean enabled = true;
+    // v4.0.1：默认关闭，与 XzhScanConfig.authEnabled 默认值对齐（单一事实源）
+    private volatile boolean enabled = false;
     /** v3.9.3：UI 用户启停回调（扩展注册，用于即时持久化）。 */
     private volatile Runnable onUserToggle;
     private volatile IdentityConfig identity = new IdentityConfig();
@@ -101,19 +102,9 @@ public final class AuthScanModule {
             return;
         }
         String id = "PERM-" + seq.incrementAndGet();
-
-        // 无响应：直接拒绝（状态码检查的前置条件）
-        if (observed == null) {
-            FilterRecord noResp = new FilterRecord(id, request.method, request.url, "no-response",
-                    "", AuthScanRequestFilter.Decision.REJECT,
-                    "无响应，不进入越权审计");
-            emitFilter(noResp);
-            return;
-        }
-
-        Map<String, String> headers = observed.headers;
-        FilterRecord record = filter.evaluate(id, request.method, request.url,
-                observed.statusCode, headers, request.headerValue("Accept"));
+        Map<String, String> headers = observed == null ? Map.of() : observed.headers;
+        FilterRecord record = filter.evaluate(id, request.method, request.url, headers,
+                request.headerValue("Accept"));
         emitFilter(record);
         if (!record.submitToQueue()) {
             return;
@@ -207,11 +198,9 @@ public final class AuthScanModule {
     }
 
     private void emitResult(PermResult r) {
-        // v3.9.8 修复：只报告确认和可疑的越权，过滤掉无鉴权、安全和无效结果
-        // 避免将非漏洞（如公开接口、鉴权正常）误报为越权
-        if (r.verdict != AuthScanEngine.Verdict.CONFIRMED
-            && r.verdict != AuthScanEngine.Verdict.SUSPECTED) {
-            return;  // 不报告 UNAUTHORIZED、SAFE、INVALID
+        // v3.10.1：低权限/未授权均非 2xx（鉴权正常）不显示；INVALID 仍保留提示探测失败。
+        if ("鉴权正常".equals(r.displayVerdict)) {
+            return;
         }
         Callback cb = callback.get();
         if (cb != null) {
@@ -220,6 +209,15 @@ public final class AuthScanModule {
     }
 
     public void shutdown() {
-        executor.shutdownNow();
+        // v3.10.5：先停止接收新任务并等待在途重放结束，超时再强杀（原实现直接 shutdownNow）
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
     }
 }

@@ -55,13 +55,19 @@ public final class BaselineCollector {
                 RawResponse r = transport.send(request);
                 if (r == null) {
                     b.anomaly = "null response at sample " + i;
-                    continue;
+                    break; // v3.10.2：失败立即停止采样（原实现继续打满 N 次超时，慢目标白耗数分钟）
+                }
+                if (r.statusCode <= 0) {
+                    // 传输层超时/不可达形态：后续采样只会重复超时，直接结束
+                    b.anomaly = "transport timeout/unreachable at sample " + i;
+                    break;
                 }
                 b.responses.add(r);
                 b.normalized.add(ResponseNormalizer.normalize(r));
                 b.elapsed.add(r.elapsedMs >= 0 ? r.elapsedMs : 0);
             } catch (Exception e) {
                 b.anomaly = "transport error at sample " + i + ": " + e.getMessage();
+                break; // v3.10.2：异常同样不再重试剩余采样
             }
         }
         if (b.responses.isEmpty()) {
@@ -118,16 +124,12 @@ public final class BaselineCollector {
                 }
             }
         }
-        // 耗时统计（v3.10.0：使用样本标准差 n-1）
+        // 耗时统计
         b.minElapsedMs = b.elapsed.stream().mapToLong(Long::longValue).min().orElse(0);
         double mean = b.elapsed.stream().mapToLong(Long::longValue).average().orElse(0);
-        int sampleSize = b.elapsed.size();
-        // 样本标准差：除以 n-1 而非 n（Bessel's correction），小样本时更准确
-        double variance = b.elapsed.stream()
-                .mapToDouble(x -> (x - mean) * (x - mean))
-                .sum() / Math.max(1, sampleSize - 1);
+        double var = b.elapsed.stream().mapToDouble(x -> (x - mean) * (x - mean)).average().orElse(0);
         b.meanElapsed = mean;
-        b.stdElapsed = Math.sqrt(variance);
+        b.stdElapsed = Math.sqrt(var);
         return b;
     }
 }

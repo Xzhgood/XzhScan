@@ -48,6 +48,8 @@ public final class AuthScanEngine {
         public String method;
         public String url;
         public Verdict verdict;
+        /** 组合场景展示结论（低权限/未授权 200 状态组合，覆盖 verdict 的单一标签）。 */
+        public String displayVerdict;
         public String evidenceSummary;
         public RawRequest originalRequest;
         public RawResponse originalResponse;
@@ -148,8 +150,40 @@ public final class AuthScanEngine {
             return r;
         }
         r.verdict = judge(r);
+        r.displayVerdict = combinedVerdict(r);
         r.evidenceSummary = summaryOf(r);
         return r;
+    }
+
+    /**
+     * 组合场景结论（v3.10.1）：低权限请求/未授权请求的状态码组合，明确区分
+     * 「越权」与「未授权」是否可能同时存在：
+     *  低 200 + 无 200 -> 存在越权 OR 存在未授权
+     *  低 非200 + 无 200 -> 不存在越权 OR 存在未授权
+     *  低 200 + 无 非200 -> 存在越权
+     *  其余（低/无均非 200）-> 鉴权正常（不显示）
+     * INVALID（探测失败）保留原标签，避免把失败误当鉴权正常。
+     */
+    private static String combinedVerdict(PermResult r) {
+        if (r.verdict == Verdict.INVALID) {
+            return r.verdict.label;
+        }
+        boolean lowOk = is2xx(r.lowResponse);
+        boolean noOk = is2xx(r.noAuthResponse);
+        if (lowOk && noOk) {
+            return "存在越权 OR 存在未授权";
+        }
+        if (!lowOk && noOk) {
+            return "不存在越权 OR 存在未授权";
+        }
+        if (lowOk) {
+            return "存在越权";
+        }
+        return "鉴权正常";
+    }
+
+    private static boolean is2xx(RawResponse resp) {
+        return resp != null && resp.statusCode >= 200 && resp.statusCode < 300;
     }
 
     private Verdict judge(PermResult r) {

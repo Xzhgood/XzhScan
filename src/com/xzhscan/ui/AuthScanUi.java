@@ -35,6 +35,8 @@ public final class AuthScanUi {
 
     private ResultTableModel resultModel;
     private JLabel filterStatsLabel;
+    /** v4.0.1：身份配置完整性指示（低权限头 + 待移除头是否都已配置）。 */
+    private JLabel configStatusLabel;
     private HttpRequestEditor origReqEditor;
     private HttpRequestEditor lowReqEditor;
     private HttpRequestEditor noAuthReqEditor;
@@ -105,7 +107,8 @@ public final class AuthScanUi {
             return switch (c) {
                 case 0 -> p.url;
                 case 1 -> p.method;
-                case 2 -> p.verdict == null ? "-" : p.verdict.label;
+                case 2 -> p.displayVerdict != null ? p.displayVerdict
+                        : (p.verdict == null ? "-" : p.verdict.label);
                 case 3 -> code(p.originalResponse) + "/" + code(p.lowResponse) + "/" + code(p.noAuthResponse);
                 case 4 -> len(p.originalResponse) + "/" + len(p.lowResponse) + "/" + len(p.noAuthResponse);
                 case 5 -> p.evidenceSummary == null ? "" : p.evidenceSummary;
@@ -226,8 +229,42 @@ public final class AuthScanUi {
 
         enableBox = new JCheckBox("启用 AuthScan 越权检测（监听流量自动复核）", module.isEnabled());
         // v3.9.3：用户勾选即持久化（扩展注册回调）
-        enableBox.addActionListener(e -> module.setEnabledByUser(enableBox.isSelected()));
+        // v4.0.1：启用前做身份配置完整性检查，避免"看似开启、实际全部静默跳过"
+        enableBox.addActionListener(e -> {
+            boolean toEnable = enableBox.isSelected();
+            if (toEnable) {
+                IdentityConfig cfg = module.identity();
+                if (cfg.lowAuthHeaders.isEmpty() || cfg.noAuthHeaderNames.isEmpty()) {
+                    int choice = JOptionPane.YES_OPTION;
+                    try {
+                        choice = JOptionPane.showConfirmDialog(enableBox,
+                                "越权检测配置不完整：\n\n"
+                                        + "低权限认证头：" + (cfg.lowAuthHeaders.isEmpty() ? "未配置" : "已配置") + "\n"
+                                        + "待移除的鉴权头：" + (cfg.noAuthHeaderNames.isEmpty() ? "未配置" : "已配置") + "\n\n"
+                                        + "配置不完整时所有请求会被静默跳过（不会执行越权检测）。\n"
+                                        + "请先在下方填写并点「应用身份与过滤配置」。\n\n是否仍要启用？",
+                                "XzhScan AuthScan", JOptionPane.YES_NO_OPTION,
+                                JOptionPane.WARNING_MESSAGE);
+                    } catch (Throwable ignored) {
+                        // headless：无弹窗环境按继续处理
+                    }
+                    if (choice != JOptionPane.YES_OPTION) {
+                        enableBox.setSelected(false);
+                        return;
+                    }
+                }
+            }
+            module.setEnabledByUser(toEnable);
+            updateConfigStatus();
+        });
         addRow(p, g, row++, enableBox);
+
+        configStatusLabel = new JLabel();
+        updateConfigStatus();
+        JPanel statusBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
+        statusBar.add(new JLabel("配置状态："));
+        statusBar.add(configStatusLabel);
+        addRow(p, g, row++, statusBar);
 
         filterEnableBox = new JCheckBox("静态资源过滤总开关（js/ico/图片/字体/音视频/压缩包/下载文件等）",
                 module.filter().config().enabled);
@@ -293,6 +330,7 @@ public final class AuthScanUi {
             module.updateIdentity(cfg);
             module.filter().config().extraExtensions = extraExtField.getText().trim();
             refreshFilterStats();
+            updateConfigStatus();
             String extra = module.filter().config().extraExtensions == null
                     || module.filter().config().extraExtensions.isBlank()
                     ? "无" : module.filter().config().extraExtensions;
@@ -432,6 +470,28 @@ public final class AuthScanUi {
             long[] c = module.filterCounters();
             filterStatsLabel.setText("过滤统计：ALLOW " + c[0] + " / REJECT " + c[1] + " / UNKNOWN " + c[2]
                     + "（REJECT 原因见 Burp Output [filter] 行）");
+        }
+    }
+
+    /**
+     * v4.0.1：身份配置完整性指示——低权限头与待移除头缺任一，自动复核会静默跳过；
+     * 设置页显式标红，避免用户误以为检测在工作。
+     */
+    private void updateConfigStatus() {
+        if (configStatusLabel == null) {
+            return;
+        }
+        IdentityConfig cfg = module.identity();
+        boolean low = cfg.lowAuthHeaders != null && !cfg.lowAuthHeaders.isEmpty();
+        boolean no = cfg.noAuthHeaderNames != null && !cfg.noAuthHeaderNames.isEmpty();
+        if (low && no) {
+            configStatusLabel.setText("完整（低权限 " + cfg.lowAuthHeaders.size()
+                    + " 头 / 移除 " + cfg.noAuthHeaderNames.size() + " 头）");
+            configStatusLabel.setForeground(new Color(0, 150, 0));
+        } else {
+            configStatusLabel.setText("不完整（低权限头" + (low ? "已配置" : "未配置")
+                    + "，待移除头" + (no ? "已配置" : "未配置") + "）——自动复核会跳过，请填写后点「应用身份与过滤配置」");
+            configStatusLabel.setForeground(new Color(200, 120, 0));
         }
     }
 

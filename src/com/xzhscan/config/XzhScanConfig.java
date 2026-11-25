@@ -7,22 +7,22 @@ package com.xzhscan.config;
 public final class XzhScanConfig {
 
     // ---------------- 总开关 ----------------
-    /** 第一阶段（XiaSQL 被动初筛）总开关。 */
+    /** 第一阶段（XiaSQL 被动初筛）总开关。v4.0.1：默认关闭，用户手动启用。 */
     public boolean phase1Enabled = false;
-    /** 第二阶段（SQL 复检引擎）总开关。 */
+    /** 第二阶段（SQL 复检引擎，右键人工触发）总开关。v4.0.1：默认关闭，用户手动启用。 */
     public boolean phase2Enabled = false;
     // v3.1：autoVerify（自动二阶段）已整体移除——被动只列候选，二阶段一律人工触发
     // （右键「XzhScan SQL 验证」/差分页右键）。旧持久化键读取时安全忽略。
 
     // ---------------- 流量来源 ----------------
-    public boolean watchProxy = false;
-    public boolean watchRepeater = false;
+    public boolean watchProxy = true;
+    public boolean watchRepeater = true;
     public boolean watchScanner = false;
     // v3.9：Intruder 流量监听（默认关）。开启后仅状态码严格 200 的完整响应
     // 进入差分扫描准入（201/302/404/500 等一律跳过）；200 只是准入条件，
     // 注入判定仍由后端安全闸/差分门/二阶段引擎按原标准执行。
     public boolean watchIntruder = false;
-    public boolean watchManualMenu = true;  // 修复：默认启用右键菜单
+    public boolean watchManualMenu = true;
 
     // ---------------- 第一阶段探针 ----------------
     // v3.5：被动时间探针（probeTimePayloads/timeProbePassRatio/allowStackedProbes/
@@ -37,8 +37,8 @@ public final class XzhScanConfig {
     public int dedupWindowMinutes = 240;
 
     // ---------------- 基线与差分 ----------------
-    /** 基线采样次数（>=2 才能评估稳定性；v3.10.0: 默认从 3 增加到 10）。 */
-    public int baselineSamples = 10;
+    /** 基线采样次数（>=2 才能评估稳定性）。 */
+    public int baselineSamples = 3;
     /** INCONCLUSIVE 候选的最大重测次数。 */
     public int maxStabilityRetests = 2;
     /** 微弱长度差集（绝对值），默认 {1,2}。 */
@@ -47,8 +47,6 @@ public final class XzhScanConfig {
     public double minDifferenceScore = 0.55;
     /** JSON 严格校验：变异失败禁止发送。 */
     public boolean jsonStrictValidation = true;
-    /** 时间标准差系数（v3.10.0 新增；3-7，推荐 5；3σ=99.7%, 5σ=99.9999%, 7σ=99.9999999997%）。 */
-    public double timingStdCoeff = 5.0;
 
     // 差分评分权重（DifferenceScore = 加权和，上限 1.0）
     public double weightStructure = 0.20;   // 结构变化
@@ -67,8 +65,6 @@ public final class XzhScanConfig {
      * 取值 2-10；调低会明显增加误报，调高会显著变慢。
      */
     public int timeDelaySeconds = 5;
-    /** 最小有效延迟（v3.10.0 新增；ms，默认 1000；即使基线很快也需此延迟才算命中）。 */
-    public long minValidDelayMs = 1000;
     /** 每个候选验证的最长耗时（ms）。S=5 时快探全量约 130s + 三级阶梯 11s，默认放到 300s。 */
     public long verifyTimeoutMs = 300_000;
     public boolean reportWafBlocked = true;
@@ -81,11 +77,17 @@ public final class XzhScanConfig {
     public int requestIntervalMs = 200;
     public int maxConcurrentScans = 2;
     public int requestTimeoutMs = 20_000;
+    /**
+     * v3.10.2：一阶段单请求总预算（ms），0=不限制。
+     * 参考 DetSql 的有界任务 + 超时思路：目标挂死/极慢时单条流量最多占用
+     * 扫描线程这么久，随后提前结束并标记 budget-exhausted，避免队列堆积卡死。
+     */
+    public long phase1BudgetMs = 180_000;
 
     // ---------------- AuthScan（原 PermAccess）持久化 ----------------
     /** v3.9.3：默认关闭——未在 AuthScan 页勾选启用时完全不干活、零日志输出。 */
     public boolean authEnabled = false;
-    public boolean authFilterEnabled = false;
+    public boolean authFilterEnabled = true;
     /** 低权限认证头（多行，每行 "Name: value"）。 */
     public String authLowAuthHeaders = "";
     /** 待移除鉴权头名（多行）。 */
@@ -97,16 +99,6 @@ public final class XzhScanConfig {
 
     // ---------------- UI ----------------
     public boolean uiGroupDedup = true;
-
-    // ---------------- Fuzz Path Processor ----------------
-    /** Fuzz 路径黑名单（多行，每行一个关键词）。 */
-    public String fuzzPathBlacklist = "";
-    /** Fuzz 路径静态资源后缀（逗号分隔）。 */
-    public String fuzzPathStaticExts = "js,mjs,css,map,png,jpg,jpeg,gif,svg,ico,webp,bmp,woff,woff2,ttf,eot,otf,mp3,mp4,webm,avi";
-    /** Fuzz 路径是否移除 Query 参数。 */
-    public boolean fuzzPathRemoveQuery = false;  // 修复：默认不移除参数（保留原始 URL）
-    /** Fuzz 路径是否移除 Fragment。 */
-    public boolean fuzzPathRemoveFragment = true;
 
     /** 深拷贝（供测试与设置回滚）。 */
     public XzhScanConfig copy() {
@@ -133,10 +125,8 @@ public final class XzhScanConfig {
         c.weightStatusChange = weightStatusChange;
         c.weightDbError = weightDbError;
         c.weightContentDiff = weightContentDiff;
-        c.timingStdCoeff = timingStdCoeff;
         c.allowTimeBasedProbe = allowTimeBasedProbe;
         c.timeDelaySeconds = timeDelaySeconds;
-        c.minValidDelayMs = minValidDelayMs;
         c.verifyTimeoutMs = verifyTimeoutMs;
         c.reportWafBlocked = reportWafBlocked;
         c.domainWhitelist = domainWhitelist;
@@ -145,16 +135,13 @@ public final class XzhScanConfig {
         c.requestIntervalMs = requestIntervalMs;
         c.maxConcurrentScans = maxConcurrentScans;
         c.requestTimeoutMs = requestTimeoutMs;
+        c.phase1BudgetMs = phase1BudgetMs;
         c.authEnabled = authEnabled;
         c.authFilterEnabled = authFilterEnabled;
         c.authLowAuthHeaders = authLowAuthHeaders;
         c.authNoAuthHeaders = authNoAuthHeaders;
         c.authWhitelistDomains = authWhitelistDomains;
         c.authExtraExtensions = authExtraExtensions;
-        c.fuzzPathBlacklist = fuzzPathBlacklist;
-        c.fuzzPathStaticExts = fuzzPathStaticExts;
-        c.fuzzPathRemoveQuery = fuzzPathRemoveQuery;
-        c.fuzzPathRemoveFragment = fuzzPathRemoveFragment;
         return c;
     }
 }

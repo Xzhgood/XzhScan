@@ -1,11 +1,7 @@
 package com.xzhscan.ui;
 
 import com.xzhscan.dictionary.DictEntry;
-import com.xzhscan.dictionary.FuzzPathProcessor;
-import com.xzhscan.dictionary.FuzzPathResult;
 import com.xzhscan.dictionary.InfoGenerator;
-import com.xzhscan.dictionary.SqlDict;
-import com.xzhscan.dictionary.SqlmapCmdDict;
 import com.xzhscan.dictionary.PathDict;
 import com.xzhscan.dictionary.WeakPasswordGenerator;
 import com.xzhscan.dictionary.XssDict;
@@ -13,10 +9,8 @@ import com.xzhscan.dictionary.XssDict;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
-import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
-import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JPanel;
@@ -26,7 +20,6 @@ import javax.swing.JTabbedPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
-import javax.swing.SwingWorker;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.GridBagConstraints;
@@ -35,9 +28,6 @@ import java.awt.Insets;
 import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.ActionListener;
-import java.io.File;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -45,36 +35,24 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Dictionary 页签：渗透字典与生成器速查（七子页）。
+ * Dictionary 页签：渗透字典与生成器速查（四子页）。
  *
- *  - SQL库名注入：五类 DBMS 出库名语句（sqlmap queries.xml 形态；盲注仅布尔差分）；
- *  - sqlmap命令：按注入类型/鉴权/绕过/https 的命令模板；
  *  - XSS字典：实战 payload（分组 + 原始备注）；
  *  - 路径字典：文件读取/路径穿越 payload（原版扫描器全量 45 条，四类目标文件）；
  *  - 信息生成：随机姓名/手机号/身份证/信用代码/组织机构代码/银行卡；
- *  - 字典生成：十关键字段弱口令组合字典 + top100；
- *  - Fuzz路径处理：批量路径清洗、去重、过滤（本地文本处理，零HTTP请求）。
+ *  - 字典生成：十关键字段弱口令组合字典 + top100。
  *
  * 通用字典面板 = 分类过滤 + 搜索 + 条目列表 + 详情正文 + 一键复制。零 Burp 依赖。
  */
 public final class DictionaryUi {
 
-    private final com.xzhscan.config.XzhScanConfig config;
-
-    public DictionaryUi(com.xzhscan.config.XzhScanConfig config) {
-        this.config = config;
-    }
-
     /** 构建 Dictionary 主面板（EDT 调用）。 */
     public JTabbedPane build() {
         JTabbedPane tabs = new JTabbedPane();
-        tabs.addTab("SQL库名注入", dictPanel(SqlDict.all(), true));
-        tabs.addTab("sqlmap命令", dictPanel(SqlmapCmdDict.all(), false));
         tabs.addTab("XSS字典", dictPanel(XssDict.all(), false));
         tabs.addTab("路径字典", dictPanel(pathEntries(), false));
         tabs.addTab("信息生成", buildInfoPanel());
         tabs.addTab("字典生成", buildWeakPwdPanel());
-        tabs.addTab("Fuzz路径处理", buildFuzzPathPanel());
         return tabs;
     }
 
@@ -382,225 +360,6 @@ public final class DictionaryUi {
         JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, top, new JScrollPane(output));
         split.setResizeWeight(0.35);
         root.add(split, BorderLayout.CENTER);
-        return root;
-    }
-
-    // ================= Fuzz Path Processor =================
-
-    /** Fuzz 路径处理面板（批量清洗、去重、过滤）。 */
-    private JComponent buildFuzzPathPanel() {
-        JPanel root = new JPanel(new BorderLayout(8, 8));
-        root.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
-
-        // ---- 顶部控制面板 ----
-        JPanel controlPanel = new JPanel();
-        controlPanel.setLayout(new GridBagLayout());
-        controlPanel.setBorder(BorderFactory.createTitledBorder("清洗规则"));
-        GridBagConstraints g = new GridBagConstraints();
-        g.insets = new Insets(4, 4, 4, 4);
-        g.fill = GridBagConstraints.HORIZONTAL;
-
-        // 黑名单设置
-        g.gridx = 0;
-        g.gridy = 0;
-        g.weightx = 0;
-        controlPanel.add(new JLabel("黑名单关键词:"), g);
-        g.gridx = 1;
-        g.weightx = 1.0;
-        g.gridwidth = 3;
-        JTextArea blacklistArea = new JTextArea(5, 40);
-        blacklistArea.setText(config.fuzzPathBlacklist);
-        blacklistArea.setLineWrap(true);
-        blacklistArea.setWrapStyleWord(true);
-        blacklistArea.setToolTipText("每行一个关键词，不区分大小写。按Enter换行。");
-        JScrollPane blacklistScroll = new JScrollPane(blacklistArea);
-        controlPanel.add(blacklistScroll, g);
-
-        // 静态资源后缀
-        g.gridx = 0;
-        g.gridy = 1;
-        g.weightx = 0;
-        g.gridwidth = 1;
-        controlPanel.add(new JLabel("静态资源后缀:"), g);
-        g.gridx = 1;
-        g.weightx = 1.0;
-        g.gridwidth = 3;
-        JTextField staticExtsField = new JTextField(config.fuzzPathStaticExts, 40);
-        controlPanel.add(staticExtsField, g);
-
-        // 规则复选框
-        g.gridx = 0;
-        g.gridy = 2;
-        g.weightx = 0;
-        g.gridwidth = 1;
-        controlPanel.add(new JLabel("处理规则:"), g);
-
-        JCheckBox removeQueryCb = new JCheckBox("移除Query参数", config.fuzzPathRemoveQuery);
-        g.gridx = 1;
-        controlPanel.add(removeQueryCb, g);
-
-        JCheckBox removeFragmentCb = new JCheckBox("移除Fragment", config.fuzzPathRemoveFragment);
-        g.gridx = 2;
-        controlPanel.add(removeFragmentCb, g);
-
-        root.add(controlPanel, BorderLayout.NORTH);
-
-        // ---- 中间：左右分栏 ----
-        JTextArea inputArea = new JTextArea();
-        inputArea.setLineWrap(false);
-        inputArea.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN, 12));
-        JScrollPane inputScroll = new JScrollPane(inputArea);
-        inputScroll.setBorder(BorderFactory.createTitledBorder("原始路径输入"));
-
-        JTextArea outputArea = new JTextArea();
-        outputArea.setLineWrap(false);
-        outputArea.setEditable(false);
-        outputArea.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN, 12));
-        JScrollPane outputScroll = new JScrollPane(outputArea);
-        outputScroll.setBorder(BorderFactory.createTitledBorder("清洗结果输出"));
-
-        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, inputScroll, outputScroll);
-        splitPane.setResizeWeight(0.5);
-        splitPane.setDividerLocation(0.5);
-        root.add(splitPane, BorderLayout.CENTER);
-
-        // ---- 底部：统计 + 按钮 ----
-        JPanel bottomPanel = new JPanel(new BorderLayout(8, 0));
-
-        // 统计标签
-        JLabel statsLabel = new JLabel("原始: 0 | 有效: 0 | 重复: 0 | 黑名单: 0 | 静态资源: 0 | 其他无效: 0");
-        statsLabel.setBorder(BorderFactory.createEmptyBorder(4, 0, 4, 0));
-        bottomPanel.add(statsLabel, BorderLayout.WEST);
-
-        // 按钮面板
-        JPanel buttonPanel = new JPanel();
-        buttonPanel.setLayout(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 4, 0));
-
-        JButton processBtn = new JButton("开始清洗");
-        JButton importBtn = new JButton("导入TXT");
-        JButton exportBtn = new JButton("导出TXT");
-        JButton copyBtn = new JButton("复制结果");
-        JButton clearBtn = new JButton("清空");
-
-        buttonPanel.add(processBtn);
-        buttonPanel.add(importBtn);
-        buttonPanel.add(exportBtn);
-        buttonPanel.add(copyBtn);
-        buttonPanel.add(clearBtn);
-
-        bottomPanel.add(buttonPanel, BorderLayout.EAST);
-        root.add(bottomPanel, BorderLayout.SOUTH);
-
-        // ---- 事件处理 ----
-
-        // 开始清洗
-        processBtn.addActionListener(e -> {
-            String input = inputArea.getText();
-            if (input.trim().isEmpty()) {
-                statsLabel.setText("请先输入路径！");
-                return;
-            }
-
-            processBtn.setEnabled(false);
-            statsLabel.setText("处理中...");
-
-            // 后台处理（避免阻塞 EDT）
-            new SwingWorker<FuzzPathResult, Void>() {
-                @Override
-                protected FuzzPathResult doInBackground() {
-                    String blacklist = blacklistArea.getText();
-                    String staticExts = staticExtsField.getText();
-                    boolean removeQuery = removeQueryCb.isSelected();
-                    boolean removeFragment = removeFragmentCb.isSelected();
-
-                    FuzzPathProcessor processor = new FuzzPathProcessor(
-                            staticExts, blacklist, removeQuery, removeFragment);
-                    return processor.process(input);
-                }
-
-                @Override
-                protected void done() {
-                    try {
-                        FuzzPathResult result = get();
-                        StringBuilder output = new StringBuilder();
-                        for (String path : result.validPaths) {
-                            output.append(path).append("\n");
-                        }
-                        outputArea.setText(output.toString());
-                        outputArea.setCaretPosition(0);
-                        statsLabel.setText(result.getSummary());
-
-                        config.fuzzPathBlacklist = blacklistArea.getText();
-                        config.fuzzPathStaticExts = staticExtsField.getText();
-                        config.fuzzPathRemoveQuery = removeQueryCb.isSelected();
-                        config.fuzzPathRemoveFragment = removeFragmentCb.isSelected();
-                    } catch (Exception ex) {
-                        statsLabel.setText("处理失败: " + ex.getMessage());
-                    } finally {
-                        processBtn.setEnabled(true);
-                    }
-                }
-            }.execute();
-        });
-
-        // 导入 TXT
-        importBtn.addActionListener(e -> {
-            JFileChooser fc = new JFileChooser();
-            fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Text Files (*.txt)", "txt"));
-            if (fc.showOpenDialog(root) == JFileChooser.APPROVE_OPTION) {
-                try {
-                    File file = fc.getSelectedFile();
-                    String content = Files.readString(file.toPath(), StandardCharsets.UTF_8);
-                    inputArea.setText(content);
-                    statsLabel.setText("已导入: " + file.getName());
-                } catch (Exception ex) {
-                    statsLabel.setText("导入失败: " + ex.getMessage());
-                }
-            }
-        });
-
-        // 导出 TXT
-        exportBtn.addActionListener(e -> {
-            String output = outputArea.getText();
-            if (output.trim().isEmpty()) {
-                statsLabel.setText("没有可导出的内容！");
-                return;
-            }
-
-            JFileChooser fc = new JFileChooser();
-            fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Text Files (*.txt)", "txt"));
-            fc.setSelectedFile(new File("fuzz_paths.txt"));
-            if (fc.showSaveDialog(root) == JFileChooser.APPROVE_OPTION) {
-                try {
-                    File file = fc.getSelectedFile();
-                    Files.writeString(file.toPath(), output, StandardCharsets.UTF_8);
-                    statsLabel.setText("已导出: " + file.getName());
-                } catch (Exception ex) {
-                    statsLabel.setText("导出失败: " + ex.getMessage());
-                }
-            }
-        });
-
-        // 复制结果
-        copyBtn.addActionListener(e -> {
-            String output = outputArea.getText();
-            if (output.trim().isEmpty()) {
-                statsLabel.setText("没有可复制的内容！");
-                return;
-            }
-
-            Toolkit.getDefaultToolkit().getSystemClipboard()
-                    .setContents(new StringSelection(output), null);
-            statsLabel.setText("已复制 " + outputArea.getLineCount() + " 行到剪贴板");
-        });
-
-        // 清空
-        clearBtn.addActionListener(e -> {
-            inputArea.setText("");
-            outputArea.setText("");
-            statsLabel.setText("已清空");
-        });
-
         return root;
     }
 

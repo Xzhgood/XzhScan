@@ -14,8 +14,8 @@ public final class ConfigCodec {
     private static final String NL = String.valueOf((char) 10);
     private static final String ESC_NL = String.valueOf((char) 92) + 'n';
 
-    /** 当前配置格式版本（与插件 VERSION 同步维护）。 */
-    public static final String CONFIG_VERSION = "3.9.7";
+    /** 当前配置格式版本（配置规则变更时独立递增，不跟随插件 VERSION）。 */
+    public static final String CONFIG_VERSION = "4.0.1";
 
     /**
      * 历史迁移记录（说明性质，供加载日志与审计）：
@@ -54,10 +54,8 @@ public final class ConfigCodec {
         m.put("watchScanner", String.valueOf(c.watchScanner));
         m.put("watchIntruder", String.valueOf(c.watchIntruder));
         m.put("jsonStrictValidation", String.valueOf(c.jsonStrictValidation));
-        m.put("timingStdCoeff", String.valueOf(c.timingStdCoeff));
         m.put("allowTimeBasedProbe", String.valueOf(c.allowTimeBasedProbe));
         m.put("timeDelaySeconds", String.valueOf(c.timeDelaySeconds));
-        m.put("minValidDelayMs", String.valueOf(c.minValidDelayMs));
         m.put("denyWriteLookingEndpoints", String.valueOf(c.denyWriteLookingEndpoints));
         m.put("baselineSamples", String.valueOf(c.baselineSamples));
         m.put("maxConcurrentScans", String.valueOf(c.maxConcurrentScans));
@@ -65,6 +63,7 @@ public final class ConfigCodec {
         m.put("minDifferenceScore", String.valueOf(c.minDifferenceScore));
         m.put("requestIntervalMs", String.valueOf(c.requestIntervalMs));
         m.put("requestTimeoutMs", String.valueOf(c.requestTimeoutMs));
+        m.put("phase1BudgetMs", String.valueOf(c.phase1BudgetMs));
         m.put("dedupWindowMinutes", String.valueOf(c.dedupWindowMinutes));
         m.put("authEnabled", String.valueOf(c.authEnabled));
         m.put("authFilterEnabled", String.valueOf(c.authFilterEnabled));
@@ -72,10 +71,6 @@ public final class ConfigCodec {
         m.put("authNoAuthHeaders", c.authNoAuthHeaders.replace(NL, ESC_NL));
         m.put("authWhitelistDomains", c.authWhitelistDomains.replace(NL, ESC_NL));
         m.put("authExtraExtensions", c.authExtraExtensions == null ? "" : c.authExtraExtensions);
-        m.put("fuzzPathBlacklist", c.fuzzPathBlacklist.replace(NL, ESC_NL));
-        m.put("fuzzPathStaticExts", c.fuzzPathStaticExts == null ? "" : c.fuzzPathStaticExts);
-        m.put("fuzzPathRemoveQuery", String.valueOf(c.fuzzPathRemoveQuery));
-        m.put("fuzzPathRemoveFragment", String.valueOf(c.fuzzPathRemoveFragment));
         m.put("domainWhitelist", c.domainWhitelist == null ? "" : c.domainWhitelist);
         m.put("urlBlacklist", c.urlBlacklist == null ? "" : c.urlBlacklist);
         StringBuilder sb = new StringBuilder();
@@ -111,17 +106,16 @@ public final class ConfigCodec {
                 case "watchScanner" -> c.watchScanner = Boolean.parseBoolean(v);
                 case "watchIntruder" -> c.watchIntruder = Boolean.parseBoolean(v);
                 case "jsonStrictValidation" -> c.jsonStrictValidation = Boolean.parseBoolean(v);
-                case "timingStdCoeff" -> c.timingStdCoeff = parseDouble(v, c.timingStdCoeff, 3.0, 7.0);
                 case "allowTimeBasedProbe" -> c.allowTimeBasedProbe = Boolean.parseBoolean(v);
                 case "timeDelaySeconds" -> c.timeDelaySeconds = parseInt(v, c.timeDelaySeconds, 2, 10);
-                case "minValidDelayMs" -> c.minValidDelayMs = (long) parseInt(v, (int) c.minValidDelayMs, 500, 5000);
                 case "denyWriteLookingEndpoints" -> c.denyWriteLookingEndpoints = Boolean.parseBoolean(v);
-                case "baselineSamples" -> c.baselineSamples = parseInt(v, c.baselineSamples, 2, 20);
+                case "baselineSamples" -> c.baselineSamples = parseInt(v, c.baselineSamples, 2, 6);
                 case "maxConcurrentScans" -> c.maxConcurrentScans = parseInt(v, c.maxConcurrentScans, 1, 8);
                 case "weakDeltaThreshold" -> c.weakDeltaThreshold = parseInt(v, c.weakDeltaThreshold, 0, 10);
                 case "minDifferenceScore" -> c.minDifferenceScore = parseDouble(v, c.minDifferenceScore, 0.05, 1.0);
                 case "requestIntervalMs" -> c.requestIntervalMs = parseInt(v, c.requestIntervalMs, 0, MAX_INTERVAL_MS);
                 case "requestTimeoutMs" -> c.requestTimeoutMs = parseInt(v, c.requestTimeoutMs, MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
+                case "phase1BudgetMs" -> c.phase1BudgetMs = parseInt(v, (int) c.phase1BudgetMs, 30_000, 600_000);
                 case "dedupWindowMinutes" -> c.dedupWindowMinutes = parseInt(v, c.dedupWindowMinutes, 0, 1440);
                 case "authEnabled" -> c.authEnabled = Boolean.parseBoolean(v);
                 case "authFilterEnabled" -> c.authFilterEnabled = Boolean.parseBoolean(v);
@@ -129,10 +123,6 @@ public final class ConfigCodec {
                 case "authNoAuthHeaders" -> c.authNoAuthHeaders = v;
                 case "authWhitelistDomains" -> c.authWhitelistDomains = v;
                 case "authExtraExtensions" -> c.authExtraExtensions = v;
-                case "fuzzPathBlacklist" -> c.fuzzPathBlacklist = v;
-                case "fuzzPathStaticExts" -> c.fuzzPathStaticExts = v;
-                case "fuzzPathRemoveQuery" -> c.fuzzPathRemoveQuery = Boolean.parseBoolean(v);
-                case "fuzzPathRemoveFragment" -> c.fuzzPathRemoveFragment = Boolean.parseBoolean(v);
                 // probeTimePayloads/timeProbePassRatio/allowStackedProbes/probeOracleTime
                 // （v3.5 移除）与 dir* 键（v2.1 已删除 DirScan 模块）：读取时忽略，不报错
                 case "domainWhitelist" -> c.domainWhitelist = v;
@@ -148,13 +138,10 @@ public final class ConfigCodec {
             // v3.9.3：AuthScan 默认关闭。旧持久化里的 authEnabled=true 是旧默认值残留
             //（卸载钩子自动存盘），不是用户显式选择——强制归位，UI 勾选才是真相源。
             c.authEnabled = false;
-            // v3.10.0：强制关闭所有自动扫描，改为手动启动（需在 SQLScan 设置中手动开启）
+            // v4.0.1：SQL 扫描总开关默认关闭。旧配置里的 true 同样是旧默认值残留
+            //（加载即扫描，未经用户明确授权），迁移时强制归位；用户 UI 勾选后才持久化为 true。
             c.phase1Enabled = false;
             c.phase2Enabled = false;
-            c.watchProxy = false;
-            c.watchRepeater = false;
-            c.watchScanner = false;
-            c.watchIntruder = false;
         }
         return migrated;
     }

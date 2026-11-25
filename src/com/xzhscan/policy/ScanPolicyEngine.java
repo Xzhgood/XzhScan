@@ -81,7 +81,7 @@ public final class ScanPolicyEngine {
     }
 
     private final XzhScanConfig config;
-    private volatile boolean paused = true;  // v3.10.0：默认暂停，需手动启动
+    private volatile boolean paused;
     /** host -> 最后请求时间戳（简单令牌间隔）。 */
     private final Map<String, AtomicLong> lastSendAt = new ConcurrentHashMap<>();
 

@@ -59,6 +59,8 @@ public final class PassiveDetectionEngine {
     private final DifferentialGate gate;
     /** 当前请求的基线证据 id（process 局部传递；v2.1 的实例字段串线缺陷已修复）。 */
     private final ThreadLocal<String> currentBaselineEvidenceId = new ThreadLocal<>();
+    /** v3.10.2：一阶段单请求截止时间（线程局部，避免并发任务串线）。 */
+    private final ThreadLocal<Long> phaseDeadlineMs = new ThreadLocal<>();
 
     public PassiveDetectionEngine(XzhScanConfig config, Transport transport, EvidenceStore evidence) {
         this.config = config;
@@ -124,6 +126,11 @@ public final class PassiveDetectionEngine {
         }
 
         // ---- 基线采样 ----
+        // v3.10.2：一阶段单请求总预算（DetSql 防卡死思路）——目标极慢/挂死时，
+        // 不让一条流量无限占用扫描线程，超出预算立即收尾（budget-exhausted）。
+        phaseDeadlineMs.set(config.phase1BudgetMs > 0
+                ? System.currentTimeMillis() + config.phase1BudgetMs : Long.MAX_VALUE);
+        try {
         record.phase1Status = "baseline";
         if (cb != null) {
             cb.onTrafficUpdate(record);
@@ -148,6 +155,15 @@ public final class PassiveDetectionEngine {
         } finally {
             this.currentBaselineEvidenceId.remove();
         }
+        } finally {
+            phaseDeadlineMs.remove();
+        }
+    }
+
+    /** v3.10.2：一阶段预算是否已耗尽（未设置=不限制）。 */
+    private boolean budgetExhausted() {
+        Long deadline = phaseDeadlineMs.get();
+        return deadline != null && System.currentTimeMillis() >= deadline;
     }
 
     private List<DifferentialCandidate> processParams(RawRequest originalRequest, RawResponse observedResponse,
@@ -166,27 +182,44 @@ public final class PassiveDetectionEngine {
                 - com.xzhscan.payload.PayloadRegistry.duplicateSourceCount().size();
 
         // ---- 逐参数 × 探针 ----
+        // v3.10.2：预算耗尽 / 线程中断 / 连续传输失败 → 立即结束本条流量的一阶段，
+        // 避免慢目标或挂死目标把扫描线程和队列拖死（DetSql 有界任务+快速失败思路）。
+        boolean budgetAborted = false;
+        int transportFailures = 0;
+        paramsLoop:
         for (ParameterIdentity param : testable) {
+            if (budgetExhausted() || Thread.currentThread().isInterrupted()) {
+                budgetAborted = true;
+                break;
+            }
             // v3.5：被动 = XiaSQL 纯差分（引号对 + 数字算术/LIMIT 对）；时间盲注
             // 一律走右键人工触发的 Phase2 全模块序列（QUICK/XRAY 五类 DBMS 模板 +
             // 三级 sleep 阶梯定罪）。被动时间探针子系统已整体移除。
-            // 每参数预算口径：引号 2 + 数字检测对（-1/-0，命中数字值时） + LIMIT 对
-            int numericExtra = config.probeNumericArith
-                    ? (param.type == com.xzhscan.model.Models.ParamType.NUMBER ? 2
-                        : (param.location != com.xzhscan.model.Models.Location.JSON
-                            && looksNumeric(param.originalValue)) ? 4 : 0)
-                    : 0;
-            record.rulesTotal += 2 + numericExtra;
+            // v3.10.5：规则数直接取实际探针数，避免新增探针后统计口径失真
             List<Probe> probes = buildProbes(param);
+            record.rulesTotal += probes.size();
             DiffEvidence best = null;
             final String[] bestProbeRef = {null};
             // v3.3 XiaSQL 形态：每条探针的原始观察都上报（不筛选），供差分页主从表直显
             List<GateProbeView> observations = new ArrayList<>();
             for (Probe probe : probes) {
+                if (budgetExhausted() || Thread.currentThread().isInterrupted()) {
+                    budgetAborted = true;
+                    break paramsLoop;
+                }
                 DiffEvidence ev = runProbe(originalRequest, param, probe, baseline, jsonRequest, record);
                 if (ev == null) {
+                    // 仅传输失败会返回 null（本地变异失败会带 invalidRequestType 返回）
+                    if (++transportFailures >= 3) {
+                        if (record.skipReasons.size() < 8) {
+                            record.skipReasons.add("abort: 3 consecutive transport failures (target unreachable/slow)");
+                        }
+                        record.phase1Status = "target-unreachable";
+                        break paramsLoop;
+                    }
                     continue;
                 }
+                transportFailures = 0;
                 observations.add(new GateProbeView(record.requestId, originalRequest.url, param.name, param.path,
                         param.location.name(), baseline.minLen, ev.mutatedLen, ev.lenDelta,
                         ev.similarity, ev.differenceScore, "观察", describeEvidence(ev),
@@ -202,14 +235,12 @@ public final class PassiveDetectionEngine {
                     cb.onRejected(record.requestId, param, probe.kind(),
                             "score " + String.format("%.2f", ev.differenceScore) + " < threshold", ev.differenceScore);
                 }
-                // 强信号提前退出：DB 错误指纹已足以过门，跳过其余探针
-                // （v3.8.3：timeProbeHit 分支随被动时间探针子系统删除，恒 false）
+                // v3.10.1：不再因 DB 错误指纹提前退出——全部探针跑完，多 payload
+                // 交叉验证（单条探针可能被网络抖动/动态页偶然触发，提前 break 会放大误报）。
                 if (best.dbErrorHit) {
-                    int remaining = probes.size() - probes.indexOf(probe) - 1;
-                    if (remaining > 0 && record.skipReasons.size() < 8) {
-                        record.skipReasons.add("early-exit after " + bestProbeRef[0] + ": " + remaining + " probes skipped");
+                    if (record.skipReasons.size() < 8) {
+                        record.skipReasons.add("DB error hit with " + bestProbeRef[0] + ", continuing remaining probes for confirmation");
                     }
-                    break;
                 }
             }
             // v3.3：先上全部探针观察行（best 那条留作判定行，避免重复展示）
@@ -238,7 +269,8 @@ public final class PassiveDetectionEngine {
             DifferentialGate.GateResult result = gate.evaluate(best, jsonRequest);
             // INCONCLUSIVE：有限次数稳定性重测
             int retest = 0;
-            while (result.decision == FilterDecision.INCONCLUSIVE && retest < config.maxStabilityRetests) {
+            while (result.decision == FilterDecision.INCONCLUSIVE && retest < config.maxStabilityRetests
+                    && !budgetExhausted() && !Thread.currentThread().isInterrupted()) {
                 retest++;
                 String bp = bestProbeRef[0];
                 DiffEvidence re = runProbe(originalRequest, param,
@@ -312,16 +344,32 @@ public final class PassiveDetectionEngine {
             }
         }
 
-        record.phase1Status = "done";
+        if (!"target-unreachable".equals(record.phase1Status)) {
+            record.phase1Status = budgetAborted ? "budget-exhausted" : "done";
+        }
+        if (budgetAborted) {
+            logBudgetAbort(record);
+        }
         if (cb != null) {
             cb.onTrafficUpdate(record);
         }
         return passed;
     }
 
+    /** 预算耗尽/中断的收尾日志与跳过原因（只记一次，避免刷屏）。 */
+    private static void logBudgetAbort(TrafficRecord record) {
+        if (record.skipReasons.size() < 8) {
+            record.skipReasons.add("phase1 budget exhausted/interrupted: remaining params/probes skipped");
+        }
+    }
+
     private DiffEvidence runProbe(RawRequest original, ParameterIdentity param, Probe probe,
                                   BaselineCollector.Baseline baseline, boolean jsonRequest, TrafficRecord record) {
         if (probe == null) {
+            return null;
+        }
+        // v3.10.2：预算耗尽/被中断后不再发新请求
+        if (budgetExhausted() || Thread.currentThread().isInterrupted()) {
             return null;
         }
         ParameterMutators.MutationResult mutation =
@@ -402,6 +450,12 @@ public final class PassiveDetectionEngine {
             if (config.probeQuotePair) {
                 probes.add(Probe.classic("quote-pair", ParameterMutators.Mode.APPEND, "''", false, false));
             }
+            // v3.10.5（DetSQL 对标）：混合型引号探针——覆盖数字/字符串边界上下文，
+            // 如 id=1'1 / name=x1"1；纯引号探针未必触发，但仍保留原有两条。
+            if (config.probeSingleQuote) {
+                probes.add(Probe.classic("mixed-quote-single", ParameterMutators.Mode.APPEND, "1'1", false, false));
+                probes.add(Probe.classic("mixed-quote-double", ParameterMutators.Mode.APPEND, "1\"1", false, false));
+            }
             if (config.probeNumericArith && valueNumeric) {
                 // XiaSQL 语义：value-1（期望产生差异）/ value-0（期望≈原响应，对照）
                 probes.add(Probe.classic("numeric-minus1", ParameterMutators.Mode.APPEND, "-1", false, false));
@@ -424,6 +478,8 @@ public final class PassiveDetectionEngine {
             // 非 JSON 数字形态（当前提取器对 QUERY/FORM 恒判 STRING，此分支兜底）
             if (config.probeSingleQuote) {
                 probes.add(Probe.classic("single-quote", ParameterMutators.Mode.APPEND, "'", false, false));
+                probes.add(Probe.classic("mixed-quote-single", ParameterMutators.Mode.APPEND, "1'1", false, false));
+                probes.add(Probe.classic("mixed-quote-double", ParameterMutators.Mode.APPEND, "1\"1", false, false));
             }
         }
         // v3.5：被动时间探针循环已随子系统移除——时间盲注由 Phase2 verifyTimeBased
@@ -431,26 +487,48 @@ public final class PassiveDetectionEngine {
         return probes;
     }
 
-    /** 观察行的简明证据描述（分型标签 + 关键数值，供差分页"变化"列）。 */
+    /** 观察行的简明证据描述（变化类型 + 关键数值，供差分页"变化"列）。 */
     private static String describeEvidence(DiffEvidence ev) {
         if (ev.invalidRequestType != null
                 && ev.invalidRequestType != com.xzhscan.model.Models.InvalidRequestType.NONE) {
             return "未发送: " + ev.invalidRequestType;
         }
-        StringBuilder sb = new StringBuilder();
+        StringBuilder desc = new StringBuilder();
+        // 1. 变化类型（优先级：SQL 报错 > 长度 > 内容 > 微弱）
         if (ev.dbErrorHit) {
-            sb.append("DB错误指纹(").append(ev.dbErrorFamily).append(") ");
+            desc.append("SQL报错");
+            if (ev.dbErrorFamily != null) {
+                desc.append(" (").append(ev.dbErrorFamily).append(")");
+            }
+        } else if (Math.abs(ev.lenDelta) > 100) {
+            desc.append("长度变化");
+        } else if (ev.similarity < 0.9) {
+            desc.append("内容变化");
+        } else {
+            desc.append("微弱变化");
         }
+        // 2. 长度差异（非 0 才显示）
+        if (ev.lenDelta != 0) {
+            desc.append(" | Δ长度: ");
+            if (ev.lenDelta > 0) {
+                desc.append("+");
+            }
+            desc.append(ev.lenDelta).append("B");
+        }
+        // 3. 相似度（非 1.0 才显示）
+        if (ev.similarity < 1.0) {
+            desc.append(" | 相似度: ").append(String.format("%.2f", ev.similarity));
+        }
+        // 4. 差分分数
+        desc.append(" | 分数: ").append(String.format("%.2f", ev.differenceScore));
+        // 5. 计时/证据分型（保留原有信息）
         if (ev.timingAnomaly) {
-            sb.append("计时异常 Δ=").append(ev.timingDeltaMs).append("ms ");
+            desc.append(" | 计时异常 Δ=").append(ev.timingDeltaMs).append("ms");
         }
         if (!ev.evidenceKinds.isEmpty()) {
-            sb.append(String.join("/", ev.evidenceKinds));
+            desc.append(" | ").append(String.join("/", ev.evidenceKinds));
         }
-        if (sb.length() == 0) {
-            sb.append("无明显变化");
-        }
-        return sb.toString().trim();
+        return desc.toString();
     }
 
     private static String orDefault(String s, String dft) {

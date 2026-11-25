@@ -31,6 +31,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 
@@ -45,8 +46,6 @@ public final class SqlScanUi {
     public static final java.awt.Color CHANGED_RED_SELECTED = new java.awt.Color(204, 0, 0);
     public static final java.awt.Color PENDING_YELLOW = new java.awt.Color(255, 204, 0);
     public static final java.awt.Color PENDING_YELLOW_SELECTED = new java.awt.Color(204, 153, 0);
-    public static final java.awt.Color REJECTED_GREEN = new java.awt.Color(0, 170, 85);
-    public static final java.awt.Color REJECTED_GREEN_SELECTED = new java.awt.Color(0, 120, 60);
 
     /** 高亮档位（数值大者优先）：0=默认 1=变化红 2=拒绝绿 3=待定黄。 */
     public static final int TIER_DEFAULT = 0;
@@ -127,8 +126,6 @@ public final class SqlScanUi {
     /** 差分页从表（payload 观察级）。 */
     public GateTableModel gateModel;
     public FindingTableModel findingModel;
-    /** 数据版（v3.9.2）：红/黄参数聚合 + 一键送二阶段。 */
-    public DataBoardModel dataBoardModel;
     // Burp 原生 HTTP 编辑器（任务书六）
     private HttpRequestEditor origReqEditor;
     private HttpRequestEditor probeReqEditor;
@@ -163,7 +160,7 @@ public final class SqlScanUi {
     }
     private boolean closed;
 
-    // v3.9.2 数据版：一键送二阶段所需引擎引用（EDT 装配段注入；未注入时按钮禁用）
+    // 二阶段引擎引用（右键验证链路；扩展装配时注入）
     private ScanOrchestrator orchestrator;
     private ScanOrchestrator.HostCallback hostCb;
 
@@ -184,7 +181,6 @@ public final class SqlScanUi {
         root = new JTabbedPane();
         root.addTab("漏洞结果", new VulnerabilityPanel().build());
         root.addTab("差分候选", new DifferentialPanel().build());
-        root.addTab("数据版", new DataBoardPanel().build());
         root.addTab("设置", new SettingsPanel().build());
         applyTheme(root);
         return root;
@@ -224,10 +220,9 @@ public final class SqlScanUi {
         if (findingModel != null) {
             findingModel.data.clear();
         }
-        if (dataBoardModel != null) {
-            dataBoardModel.clearAll();
+        if (gateRequestModel != null) {
+            gateRequestModel.data.clear();
         }
-        dataBoardAgg.clear();
     }
 
     private JTable createTable(AbstractTableModel model) {
@@ -618,7 +613,6 @@ public final class SqlScanUi {
                             c.setBackground(selected ? CHANGED_RED_SELECTED : CHANGED_RED);
                             c.setForeground(selected ? java.awt.Color.WHITE : java.awt.Color.BLACK);
                         } else {
-                            // v3.9.9: 取消绿色染色，REJECTED 使用默认颜色
                             c.setBackground(selected ? table.getSelectionBackground() : table.getBackground());
                             c.setForeground(selected ? table.getSelectionForeground() : table.getForeground());
                         }
@@ -646,7 +640,6 @@ public final class SqlScanUi {
                             c.setBackground(selected ? CHANGED_RED_SELECTED : CHANGED_RED);
                             c.setForeground(selected ? java.awt.Color.WHITE : java.awt.Color.BLACK);
                         } else {
-                            // v3.9.9: 取消绿色染色，REJECTED 使用默认颜色
                             c.setBackground(selected ? table.getSelectionBackground() : table.getBackground());
                             c.setForeground(selected ? table.getSelectionForeground() : table.getForeground());
                         }
@@ -837,14 +830,22 @@ public final class SqlScanUi {
     // ================= 2. 漏洞结果 =================
 
     public static class FindingRow {
-        public final InjectionFinding finding;
+        public InjectionFinding finding;
         public final DifferentialCandidate candidate;
-        public final VerificationResult verification;
+        public VerificationResult verification;
+        /** 排队中 / 验证中...；扫描完成后置 null（结论由 finding/verification 决定）。 */
+        public String statusType;
 
         FindingRow(InjectionFinding f, DifferentialCandidate c, VerificationResult v) {
             this.finding = f;
             this.candidate = c;
             this.verification = v;
+        }
+
+        boolean sameParam(DifferentialCandidate c) {
+            return c != null && candidate != null
+                    && java.util.Objects.equals(candidate.requestId, c.requestId)
+                    && java.util.Objects.equals(candidate.parameterPath, c.parameterPath);
         }
     }
 
@@ -867,468 +868,56 @@ public final class SqlScanUi {
             return cols[c];
         }
 
+        /** 结论列中文映射：排队中/扫描中 → 存在注入/不存在注入（v3.10.1）。 */
+        private String conclusionText(FindingRow row) {
+            if (row.statusType != null) {
+                // 扫描阶段：结论列显示「扫描中」，类型列显示「验证中...」
+                return "验证中...".equals(row.statusType) ? "扫描中" : row.statusType;
+            }
+            VerifyVerdict v = row.finding != null ? row.finding.verdict
+                    : (row.verification == null ? null : row.verification.verdict);
+            if (v == null) {
+                return "扫描中";
+            }
+            return v == VerifyVerdict.CONFIRMED ? "存在注入" : "不存在注入";
+        }
+
+        private String typeText(FindingRow row) {
+            if (row.finding != null) {
+                return row.finding.injectionType == null ? "-" : row.finding.injectionType;
+            }
+            if (row.statusType != null) {
+                return row.statusType;
+            }
+            // v3.10.2：扫描结束后类型列同步收尾（原实现永远停在「验证中...」）
+            if (row.verification != null && row.verification.verdict != null) {
+                return row.verification.verdict == VerifyVerdict.CONFIRMED ? "存在注入" : "不存在注入";
+            }
+            return "验证中...";
+        }
+
         @Override
         public Object getValueAt(int r, int c) {
+            if (r < 0 || r >= data.size()) {
+                return "";
+            }
             FindingRow row = data.get(r);
+            if (row == null) {
+                return "";
+            }
             InjectionFinding f = row.finding;
             return switch (c) {
-                case 0 -> f.verdict.name();
-                case 1 -> f.injectionType;
+                case 0 -> conclusionText(row);
+                case 1 -> typeText(row);
                 case 2 -> row.candidate.targetUrl;
-                case 3 -> f.parameterPath;
-                case 4 -> f.dbFamily == null ? "-" : f.dbFamily;
-                case 5 -> f.payload == null ? "-" : (f.payload.length() > 60 ? f.payload.substring(0, 60) + "..." : f.payload);
+                case 3 -> row.candidate.parameterPath;
+                case 4 -> f == null || f.dbFamily == null ? "-" : f.dbFamily;
+                case 5 -> f == null || f.payload == null ? "-" : (f.payload.length() > 60 ? f.payload.substring(0, 60) + "..." : f.payload);
                 default -> "";
             };
         }
     }
 
-    // ================= 3. 数据版（v3.9.2：红/黄参数聚合 + 一键送二阶段） =================
-
-    /**
-     * 参数级聚合档位（数据版口径）：红 > 黄 > 绿。
-     * 与差分页从表单行档位（黄>绿>红）、主表 URL 档位语义均不同——
-     * 数据版回答"这个参数值不值得送二阶段"：只要出现过变化就是红色；
-     * 只有待定没有变化是黄色；全部被拒绝则排除（不进数据版）。
-     */
-    public static int dataBoardTier(int[] agg) {
-        if (agg[0] > 0) {
-            return TIER_CHANGED;
-        }
-        if (agg[1] > 0) {
-            return TIER_PENDING;
-        }
-        if (agg[2] > 0) {
-            return TIER_REJECTED;
-        }
-        return TIER_DEFAULT;
-    }
-
-    /** 数据版行（key = requestId|parameterPath）。 */
-    public static final class DataBoardRow {
-        public final String requestId;
-        public final String url;
-        public final String parameterPath;
-        public final String parameterLocation;
-        public int tier = TIER_DEFAULT;
-        public double bestScore;
-        public String verifyStatus = "未发送";
-        public boolean sent;
-        /** 发送二阶段时绑定的候选（点行加载证据用）。 */
-        public DifferentialCandidate candidate;
-        /** 二阶段结论（含 evidenceIds，点行加载测试请求/响应用）。 */
-        public VerificationResult verification;
-        /** v3.9.4：聚合时得分最高的观察行（无候选时点行也能看原始/变异请求响应证据）。 */
-        public GateProbeView bestView;
-        /** v3.9.6：候选是否由原始请求现场构造（差分门未过门 → 全模块直验）。 */
-        public boolean rebuiltCandidate;
-
-        DataBoardRow(String requestId, String url, String parameterPath, String parameterLocation) {
-            this.requestId = requestId;
-            this.url = url;
-            this.parameterPath = parameterPath;
-            this.parameterLocation = parameterLocation;
-        }
-    }
-
-    public class DataBoardModel extends AbstractTableModel {
-        private final String[] cols = {"URL", "参数", "档位", "最高差分分", "二阶段状态"};
-        /** key = requestId|parameterPath，插入序即展示序。 */
-        public final java.util.LinkedHashMap<String, DataBoardRow> rows = new java.util.LinkedHashMap<>();
-        /** 与 rows 同序的行列表（表格随机访问用）。 */
-        public final List<DataBoardRow> list = new ArrayList<>();
-
-        @Override
-        public int getRowCount() {
-            return list.size();
-        }
-
-        @Override
-        public int getColumnCount() {
-            return cols.length;
-        }
-
-        @Override
-        public String getColumnName(int c) {
-            return cols[c];
-        }
-
-        @Override
-        public Object getValueAt(int r, int c) {
-            DataBoardRow d = list.get(r);
-            return switch (c) {
-                case 0 -> d.url;
-                case 1 -> d.parameterPath;
-                case 2 -> d.tier == TIER_CHANGED ? "红色·有变化" : "黄色·待定";
-                case 3 -> String.format("%.2f", d.bestScore);
-                case 4 -> d.verifyStatus;
-                default -> "";
-            };
-        }
-
-        void upsert(GateProbeView v, int tier) {
-            String key = v.requestId + "|" + v.parameterPath;
-            DataBoardRow row = rows.get(key);
-            if (row == null) {
-                row = new DataBoardRow(v.requestId, v.url, v.parameterPath, v.parameterLocation);
-                rows.put(key, row);
-                list.add(row);
-                fireTableRowsInserted(list.size() - 1, list.size() - 1);
-            }
-            row.tier = tier;
-            if (v.score > row.bestScore) {
-                row.bestScore = v.score;
-            }
-            // v3.9.4：保存最强观察行——差分门 REJECT 的参数没有候选对象，
-            // 点行时仍可用该行的证据 id 加载 原始/变异请求响应（否则编辑器全空）
-            if (row.bestView == null || v.score >= row.bestView.score) {
-                row.bestView = v;
-            }
-            int idx = list.indexOf(row);
-            if (idx >= 0) {
-                fireTableRowsUpdated(idx, idx);
-            }
-        }
-
-        void remove(String key) {
-            DataBoardRow row = rows.remove(key);
-            if (row == null) {
-                return;
-            }
-            int idx = list.indexOf(row);
-            if (idx >= 0) {
-                list.remove(idx);
-                fireTableRowsDeleted(idx, idx);
-            }
-        }
-
-        void clearAll() {
-            int n = list.size();
-            rows.clear();
-            list.clear();
-            if (n > 0) {
-                fireTableRowsDeleted(0, n - 1);
-            }
-        }
-
-        /** 二阶段结论回流：状态刷新 + 绑定结论对象（点行加载测试请求/响应用）。 */
-        void attachVerification(VerificationResult v) {
-            DataBoardRow row = rows.get(v.requestId + "|" + v.parameterPath);
-            if (row != null) {
-                row.verification = v;
-                int idx = list.indexOf(row);
-                if (idx >= 0) {
-                    fireTableRowsUpdated(idx, idx);
-                }
-            }
-        }
-
-        void markVerify(String requestId, String parameterPath, String status) {
-            DataBoardRow row = rows.get(requestId + "|" + parameterPath);
-            if (row != null) {
-                row.verifyStatus = status;
-                int idx = list.indexOf(row);
-                if (idx >= 0) {
-                    fireTableRowsUpdated(idx, idx);
-                }
-            }
-        }
-
-        void refreshAll() {
-            fireTableDataChanged();
-        }
-    }
-
-    /** 数据版聚合计数（key = requestId|parameterPath；int[3] = {变化, 待定, 拒绝}）。 */
-    private final java.util.concurrent.ConcurrentHashMap<String, int[]> dataBoardAgg =
-            new java.util.concurrent.ConcurrentHashMap<>();
-
-    /** onGateView 挂钩：参数级聚合红/黄/绿，红黄 upsert 进数据版、纯绿剔除。 */
-    private void dataBoardUpdate(GateProbeView v) {
-        if (v.parameterPath == null || dataBoardModel == null) {
-            return;
-        }
-        String key = v.requestId + "|" + v.parameterPath;
-        int[] agg = dataBoardAgg.computeIfAbsent(key, k -> new int[3]);
-        int tier = highlightTier(v);
-        if (tier == TIER_CHANGED) {
-            agg[0]++;
-        } else if (tier == TIER_PENDING) {
-            agg[1]++;
-        } else if (tier == TIER_REJECTED) {
-            agg[2]++;
-        }
-        int board = dataBoardTier(agg);
-        edtl(() -> {
-            if (dataBoardModel == null) {
-                return;
-            }
-            if (board == TIER_CHANGED || board == TIER_PENDING) {
-                dataBoardModel.upsert(v, board);
-            } else if (board == TIER_REJECTED) {
-                dataBoardModel.remove(key);
-            }
-        });
-    }
-
-    private class DataBoardPanel {
-
-        private JTable boardTable;
-        private HttpRequestEditor boardReqEditor;
-        private HttpResponseEditor boardRespEditor;
-
-        JComponent build() {
-            dataBoardModel = new DataBoardModel();
-            boardTable = createTable(dataBoardModel);
-            JTable table = boardTable;
-            // 行染色：红=有变化、黄=待定；v3.8.5 教训——渲染器复用，未命中行必须显式还原默认色
-            table.setDefaultRenderer(Object.class, new javax.swing.table.DefaultTableCellRenderer() {
-                @Override
-                public java.awt.Component getTableCellRendererComponent(JTable t, Object value,
-                                                                        boolean selected, boolean focused,
-                                                                        int viewRow, int column) {
-                    java.awt.Component c = super.getTableCellRendererComponent(
-                            t, value, selected, focused, viewRow, column);
-                    int modelRow = t.convertRowIndexToModel(viewRow);
-                    if (modelRow >= 0 && modelRow < dataBoardModel.list.size()) {
-                        DataBoardRow d = dataBoardModel.list.get(modelRow);
-                        if (d.tier == TIER_CHANGED) {
-                            c.setBackground(selected ? CHANGED_RED_SELECTED : CHANGED_RED);
-                            c.setForeground(selected ? java.awt.Color.WHITE : java.awt.Color.BLACK);
-                        } else if (d.tier == TIER_PENDING) {
-                            c.setBackground(selected ? PENDING_YELLOW_SELECTED : PENDING_YELLOW);
-                            c.setForeground(selected ? java.awt.Color.WHITE : java.awt.Color.BLACK);
-                        } else {
-                            c.setBackground(selected ? t.getSelectionBackground() : t.getBackground());
-                            c.setForeground(selected ? t.getSelectionForeground() : t.getForeground());
-                        }
-                    } else {
-                        c.setBackground(selected ? t.getSelectionBackground() : t.getBackground());
-                        c.setForeground(selected ? t.getSelectionForeground() : t.getForeground());
-                    }
-                    return c;
-                }
-            });
-
-            JPanel btns = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
-            JButton sendRed = new JButton("红色参数发送二阶段");
-            sendRed.setToolTipText("把数据版全部未发送的 红色（出现过变化） 参数逐个送二阶段（同右键安全闸与预算）");
-            JButton sendYellow = new JButton("黄色参数发送二阶段");
-            sendYellow.setToolTipText("把数据版全部未发送的 黄色（待定） 参数逐个送二阶段（同右键安全闸与预算）");
-            JButton sendSel = new JButton("发送所选");
-            JButton clearBtn = new JButton("清空");
-            JLabel hint = new JLabel("红色=出现过变化　黄色=待定（纯绿已剔除）；发送前仍过安全闸，队列满自动拒绝");
-            btns.add(sendRed);
-            btns.add(sendYellow);
-            btns.add(sendSel);
-            btns.add(clearBtn);
-            btns.add(hint);
-
-            JPanel top = new JPanel(new BorderLayout());
-            top.add(tableToolbar(table, 0, 1), BorderLayout.NORTH);
-            top.add(btns, BorderLayout.SOUTH);
-            // v3.9.3 数据版改版：点开参数行 -> 下方左=测试请求 右=测试响应（左右分栏）
-            boardReqEditor = safeCreateRequestEditor();
-            boardRespEditor = safeCreateResponseEditor();
-            javax.swing.JSplitPane evidenceSplit = new javax.swing.JSplitPane(
-                    javax.swing.JSplitPane.HORIZONTAL_SPLIT,
-                    editorOrPlaceholder(boardReqEditor, "（点上方参数行：左看测试请求）"),
-                    editorOrPlaceholder(boardRespEditor, "（点上方参数行：右看测试响应）"));
-            evidenceSplit.setResizeWeight(0.5);
-            evidenceSplit.setDividerLocation(0.5);
-            javax.swing.JSplitPane boardSplit = new javax.swing.JSplitPane(
-                    javax.swing.JSplitPane.VERTICAL_SPLIT,
-                    new JScrollPane(table), evidenceSplit);
-            boardSplit.setResizeWeight(0.45);
-            boardSplit.setDividerLocation(0.45);
-            JPanel panel = new JPanel(new BorderLayout());
-            panel.add(top, BorderLayout.NORTH);
-            panel.add(boardSplit, BorderLayout.CENTER);
-            table.getSelectionModel().addListSelectionListener(e -> {
-                if (!e.getValueIsAdjusting() && boardTable.getSelectedRow() >= 0) {
-                    loadBoardEvidence();
-                }
-            });
-
-            sendRed.addActionListener(e -> {
-                int sent = sendByTier(TIER_CHANGED);
-                dataBoardModel.refreshAll();
-                log("INFO", "[数据版] 红色参数发送完成: 发送 " + sent + " 条");
-            });
-            sendYellow.addActionListener(e -> {
-                int sent = sendByTier(TIER_PENDING);
-                dataBoardModel.refreshAll();
-                log("INFO", "[数据版] 黄色参数发送完成: 发送 " + sent + " 条");
-            });
-            sendSel.addActionListener(e -> {
-                int idx = table.getSelectedRow();
-                if (idx < 0) {
-                    return;
-                }
-                int modelRow = table.convertRowIndexToModel(idx);
-                if (modelRow < 0 || modelRow >= dataBoardModel.list.size()) {
-                    return;
-                }
-                sendRow(dataBoardModel.list.get(modelRow), false);
-                dataBoardModel.refreshAll();
-            });
-            clearBtn.addActionListener(e -> {
-                dataBoardAgg.clear();
-                dataBoardModel.clearAll();
-                log("INFO", "[数据版] 已清空（新流量会重新聚合）");
-            });
-            attachDataBoardContextMenu(table);
-            return panel;
-        }
-
-        /**
-         * 按档位批量发送（v3.9.2）：红色=出现过变化 / 黄色=待定，各自独立按钮。
-         * 只发未发送行；无候选行标记状态并跳过；发送链路与右键 verifyNow 完全同款
-         * （安全闸复核 + 队列满拒绝 + 结论回流）。
-         */
-        private int sendByTier(int tier) {
-            if (orchestrator == null || hostCb == null) {
-                log("WARN", "[数据版] 引擎未装配（扩展尚未就绪），无法发送");
-                return 0;
-            }
-            String colorWord = tier == TIER_CHANGED ? "红色" : "黄色";
-            int sent = 0, none = 0;
-            for (DataBoardRow d : dataBoardModel.list) {
-                if (d.tier != tier || d.sent) {
-                    continue;
-                }
-                DifferentialCandidate c = resolveBoardCandidate(d);
-                if (c == null) {
-                    none++;
-                    d.verifyStatus = "无证据（原始请求快照不可用）";
-                    continue;
-                }
-                d.candidate = c;
-                d.sent = true;
-                d.verifyStatus = "已发送";
-                log("INFO", "[数据版][" + colorWord + "] 送二阶段: " + d.parameterPath + " @" + d.url
-                        + (d.rebuiltCandidate ? "（差分未过门，全模块直验）" : ""));
-                orchestrator.verifyNow(c, hostCb);
-                sent++;
-            }
-            if (none > 0) {
-                log("WARN", "[数据版][" + colorWord + "] " + none + " 条无可用原始请求快照，已跳过");
-            }
-            return sent;
-        }
-
-        /**
-         * v3.9.6：取数据版行可送二阶段的候选。
-         * 差分门 PASS/INCONCLUSIVE 的参数直接用候选仓对象；差分门 REJECT 的参数
-         * （有变化但分数低于阈值，数据版照样标红）没有候选——用聚合观察行的
-         * 原始请求证据现场构造候选（走右键「指定参数验证」同款 manualCandidate
-         * 全模块直验链路，不依赖差分门）。原始请求快照不可用才返回 null。
-         */
-        private DifferentialCandidate resolveBoardCandidate(DataBoardRow d) {
-            DifferentialCandidate c = candidateStore.get(d.requestId + "|" + d.parameterPath);
-            if (c != null) {
-                return c;
-            }
-            if (d.bestView == null || d.bestView.baselineEvidenceId == null) {
-                return null;
-            }
-            EvidenceStore.Evidence base = evidence.get(d.bestView.baselineEvidenceId);
-            if (base == null || base.request == null) {
-                return null;
-            }
-            com.xzhscan.parameter.ParameterExtractor.ExtractResult ex =
-                    com.xzhscan.parameter.ParameterExtractor.extract(base.request);
-            com.xzhscan.model.Models.ParameterIdentity p = null;
-            for (com.xzhscan.model.Models.ParameterIdentity cand : ex.parameters) {
-                if (cand.path.equals(d.parameterPath)) {
-                    p = cand;
-                    break;
-                }
-            }
-            if (p == null || !p.mutable()) {
-                return null;
-            }
-            DifferentialCandidate rebuilt = ScanOrchestrator.manualCandidate(base.request, p);
-            if (rebuilt == null) {
-                return null;
-            }
-            d.rebuiltCandidate = true;
-            return rebuilt;
-        }
-
-        /** 单行发送（sent 行跳过；右键强制重发走 force）。 */
-        private void sendRow(DataBoardRow d, boolean force) {
-            if (orchestrator == null || hostCb == null) {
-                log("WARN", "[数据版] 引擎未装配（扩展尚未就绪），无法发送");
-                return;
-            }
-            if (d.sent && !force) {
-                return;
-            }
-            DifferentialCandidate c = resolveBoardCandidate(d);
-            if (c == null) {
-                d.verifyStatus = "无证据（原始请求快照不可用）";
-                log("WARN", "[数据版] 发送跳过（无可用原始请求快照）: " + d.parameterPath + " @" + d.url);
-                return;
-            }
-            d.candidate = c;
-            d.sent = true;
-            d.verifyStatus = "已发送";
-            log("INFO", "[数据版] 送二阶段" + (force ? "（重发）" : "") + ": " + d.parameterPath + " @" + d.url
-                    + (d.rebuiltCandidate ? "（差分未过门，全模块直验）" : ""));
-            orchestrator.verifyNow(c, hostCb);
-        }
-
-        /** 点开参数行：优先二阶段测试证据；无候选/未验证时回退观察行证据（原始+变异对）。 */
-        private void loadBoardEvidence() {
-            int idx = boardTable.convertRowIndexToModel(boardTable.getSelectedRow());
-            if (idx < 0 || idx >= dataBoardModel.list.size()) {
-                return;
-            }
-            DataBoardRow d = dataBoardModel.list.get(idx);
-            EvidenceBundles.Bundle b = EvidenceBundles.resolve(d.candidate, d.verification, null, evidence);
-            com.xzhscan.model.RawHttp.RawRequest req = b.probeRequest != null ? b.probeRequest : b.originalRequest;
-            com.xzhscan.model.RawHttp.RawResponse resp = b.probeResponse != null ? b.probeResponse : b.originalResponse;
-            // v3.9.4 回退：无候选（差分门 REJECT 的参数在数据版里同样标红）时，
-            // 用聚合时的观察行证据 id 加载原始请求/响应 + 变异请求/响应中的变异侧
-            if (req == null && resp == null && d.bestView != null) {
-                EvidenceStore.Evidence mut = d.bestView.mutatedEvidenceId == null
-                        ? null : evidence.get(d.bestView.mutatedEvidenceId);
-                if (mut != null) {
-                    req = mut.request;
-                    resp = mut.response;
-                }
-                if (req == null && d.bestView.baselineEvidenceId != null) {
-                    EvidenceStore.Evidence base = evidence.get(d.bestView.baselineEvidenceId);
-                    if (base != null) {
-                        req = base.request;
-                        resp = base.response;
-                    }
-                }
-            }
-            loadRequestEditor(boardReqEditor, req);
-            loadResponseEditor(boardRespEditor, resp);
-        }
-
-        private void attachDataBoardContextMenu(JTable table) {
-            JPopupMenu menu = new JPopupMenu();
-            JMenuItem send = new JMenuItem("发送到二阶段（强制重发）");
-            send.addActionListener(e -> {
-                int idx = table.getSelectedRow();
-                if (idx < 0) {
-                    return;
-                }
-                int modelRow = table.convertRowIndexToModel(idx);
-                if (modelRow < 0 || modelRow >= dataBoardModel.list.size()) {
-                    return;
-                }
-                sendRow(dataBoardModel.list.get(modelRow), true);
-                dataBoardModel.refreshAll();
-            });
-            menu.add(send);
-            table.setComponentPopupMenu(menu);
-        }
-    }
 
     private class VulnerabilityPanel {
         JComponent build() {
@@ -1364,12 +953,24 @@ public final class SqlScanUi {
             repeaterBtn.setToolTipText("优先发送判定所用的测试请求；缺失时回退原始请求");
             repeaterBtn.addActionListener(e -> sendSelectedToRepeater(table));
 
+            // v3.10.4：仅 CONFIRMED 漏洞提供自包含 sqlmap 命令（-u/--data/-H，可直接带到其他环境）
+            JButton sqlmapBtn = new JButton("复制 sqlmap 命令");
+            sqlmapBtn.setToolTipText("仅「存在注入」行可用；按漏洞 DB/类型生成自包含 sqlmap -u 命令（不存在的注入不提供）");
+            sqlmapBtn.setEnabled(false);
+            sqlmapBtn.addActionListener(e -> copySqlmapCommand(table));
+            sm.addListSelectionListener(e -> {
+                if (!e.getValueIsAdjusting()) {
+                    sqlmapBtn.setEnabled(isConfirmed(selectedFinding(table)));
+                }
+            });
+
             // v3.4.4：漏洞结果页清空列表（结果 + 四个证据编辑器一起清）
             JButton clearFindings = new JButton("清空");
             clearFindings.setToolTipText("清空漏洞结果列表与证据视图（不影响差分候选与证据仓）");
             clearFindings.addActionListener(e -> {
                 findingModel.data.clear();
                 findingModel.fireTableDataChanged();
+                sqlmapBtn.setEnabled(false);
                 loadRequestEditor(origReqEditor, null);
                 loadRequestEditor(probeReqEditor, null);
                 loadResponseEditor(origRespEditor, null);
@@ -1378,6 +979,7 @@ public final class SqlScanUi {
 
             JPanel top = new JPanel(new FlowLayout(FlowLayout.LEFT));
             top.add(repeaterBtn);
+            top.add(sqlmapBtn);
             top.add(clearFindings);
             JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT,
                     new JScrollPane(table), south);
@@ -1434,20 +1036,32 @@ public final class SqlScanUi {
     }
 
     /** 选中行 -> 四编辑器同步加载；缺证据显示明确空状态（每次全量重载，防串数据）。 */
+    /**
+     * v3.10.5：证据解析移出 EDT（EvidenceStore 全量回退最多 4000 条），
+     * 解析完成回 EDT 更新编辑器；期间选中行变化则丢弃结果，避免串数据。
+     */
     private void loadFinding(JTable table, FindingTableModel model) {
-        int modelRow = table.convertRowIndexToModel(table.getSelectedRow());
-        if (modelRow < 0 || modelRow >= model.data.size()) {
+        FindingRow fr = selectedFinding(table);
+        if (fr == null) {
             return;
         }
-        FindingRow fr = model.data.get(modelRow);
-        EvidenceBundles.Bundle b = EvidenceBundles.resolve(fr.candidate, fr.verification, fr.finding, evidence);
-        loadRequestEditor(origReqEditor, b.originalRequest);
-        loadRequestEditor(probeReqEditor, b.probeRequest);
-        loadResponseEditor(origRespEditor, b.originalResponse);
-        loadResponseEditor(probeRespEditor, b.probeResponse);
-        if (b.anyMissing()) {
-            log("INFO", "证据缺失 " + fr.finding.parameterPath + ": " + String.join("; ", b.missing));
-        }
+        final FindingRow requested = fr;
+        java.util.concurrent.CompletableFuture
+                .supplyAsync(() -> EvidenceBundles.resolve(
+                        requested.candidate, requested.verification, requested.finding, evidence))
+                .thenAccept(b -> SwingUtilities.invokeLater(() -> {
+                    if (closed || selectedFinding(table) != requested) {
+                        return; // 选择已变化/窗口已关闭：丢弃本次加载
+                    }
+                    loadRequestEditor(origReqEditor, b.originalRequest);
+                    loadRequestEditor(probeReqEditor, b.probeRequest);
+                    loadResponseEditor(origRespEditor, b.originalResponse);
+                    loadResponseEditor(probeRespEditor, b.probeResponse);
+                    if (b.anyMissing()) {
+                        log("INFO", "证据缺失 " + requested.candidate.parameterPath + ": "
+                                + String.join("; ", b.missing));
+                    }
+                }));
     }
 
     private void loadRequestEditor(HttpRequestEditor editor, com.xzhscan.model.RawHttp.RawRequest r) {
@@ -1502,7 +1116,7 @@ public final class SqlScanUi {
         if (target != null) {
             api.repeater().sendToRepeater(
                     BurpTransport.build(BurpTransport.serviceOf(target.url), target),
-                    "XzhScan-" + fr.finding.parameterPath);
+                    "XzhScan-" + fr.candidate.parameterPath);
         } else {
             log("WARN", "该记录无可用请求证据，无法发送 Repeater");
         }
@@ -1513,12 +1127,36 @@ public final class SqlScanUi {
         JMenuItem repeater = new JMenuItem("Send to Repeater（测试请求）");
         repeater.addActionListener(e -> sendSelectedToRepeater(table));
         menu.add(repeater);
+        // v3.10.3：仅 CONFIRMED 行显示/可用（不存在的注入不提供复制命令）
+        JMenuItem sqlmap = new JMenuItem("复制 sqlmap 命令");
+        sqlmap.setToolTipText("按漏洞 DB/类型生成自包含 sqlmap -u 命令；仅「存在注入」行可用");
+        sqlmap.addActionListener(e -> copySqlmapCommand(table));
+        menu.add(sqlmap);
+        javax.swing.JSeparator sqlmapSep = new javax.swing.JSeparator();
+        menu.add(sqlmapSep);
+        menu.addPopupMenuListener(new javax.swing.event.PopupMenuListener() {
+            @Override
+            public void popupMenuWillBecomeVisible(javax.swing.event.PopupMenuEvent e) {
+                boolean confirmed = isConfirmed(selectedFinding(table));
+                sqlmap.setVisible(confirmed);   // 不存在注入：不提供该入口
+                sqlmap.setEnabled(confirmed);
+                sqlmapSep.setVisible(confirmed);
+            }
+
+            @Override
+            public void popupMenuWillBecomeInvisible(javax.swing.event.PopupMenuEvent e) {
+            }
+
+            @Override
+            public void popupMenuCanceled(javax.swing.event.PopupMenuEvent e) {
+            }
+        });
         menu.addSeparator();
         JMenuItem copyUrl = new JMenuItem("Copy URL");
         copyUrl.addActionListener(e -> withSelected(table, fr -> copy(fr.candidate.targetUrl)));
         menu.add(copyUrl);
         JMenuItem copyParam = new JMenuItem("Copy Parameter");
-        copyParam.addActionListener(e -> withSelected(table, fr -> copy(fr.finding.parameterPath)));
+        copyParam.addActionListener(e -> withSelected(table, fr -> copy(fr.candidate.parameterPath)));
         menu.add(copyParam);
         JMenuItem copyReq = new JMenuItem("Copy Request");
         copyReq.addActionListener(e -> withSelected(table, fr -> {
@@ -1539,12 +1177,173 @@ public final class SqlScanUi {
                 + String.join("; ", fr.candidate.differenceReasons) + " | gate: " + fr.candidate.filterReason)));
         menu.add(copyDiff);
         JMenuItem copySummary = new JMenuItem("复制漏洞摘要");
-        copySummary.addActionListener(e -> withSelected(table, fr -> copy(
-                fr.finding.verdict + " " + fr.finding.injectionType + " "
-                        + fr.candidate.targetUrl + " param=" + fr.finding.parameterPath
-                        + (fr.finding.payload != null ? " payload=" + fr.finding.payload : ""))));
+        copySummary.addActionListener(e -> withSelected(table, fr -> copy(fr.finding == null
+                ? (fr.verification != null && fr.verification.verdict != null
+                    ? "未确认注入 " + fr.verification.verdict : "扫描中") + " " + fr.candidate.targetUrl
+                    + " param=" + fr.candidate.parameterPath
+                : fr.finding.verdict + " " + fr.finding.injectionType + " "
+                    + fr.candidate.targetUrl + " param=" + fr.finding.parameterPath
+                    + (fr.finding.payload != null ? " payload=" + fr.finding.payload : ""))));
         menu.add(copySummary);
         table.setComponentPopupMenu(menu);
+    }
+
+    /** v3.10.3：当前选中行（跨 RowSorter 行号转换）；无选中返回 null。 */
+    private FindingRow selectedFinding(JTable table) {
+        int row = table.getSelectedRow();
+        if (row < 0) {
+            return null;
+        }
+        int modelRow = table.convertRowIndexToModel(row);
+        return modelRow >= 0 && modelRow < findingModel.data.size()
+                ? findingModel.data.get(modelRow) : null;
+    }
+
+    /** 仅 CONFIRMED（存在注入）行提供 sqlmap 命令。 */
+    private static boolean isConfirmed(FindingRow fr) {
+        return fr != null && fr.finding != null && fr.finding.verdict == VerifyVerdict.CONFIRMED;
+    }
+
+    /**
+     * v3.10.4：按漏洞报告生成自包含 sqlmap 命令（参考 kenny 的参数风格）：
+     *  - 自包含 -u/--data/-H 命令（Cookie/Authorization 等认证头随命令带走，无需 request 文件）；
+     *  - -p 指定注入参数，--dbms 按 dbFamily，--technique 按注入类型；
+     *  - 不存在的注入（无 CONFIRMED finding）不生成、不复制。
+     */
+    private void copySqlmapCommand(JTable table) {
+        FindingRow fr = selectedFinding(table);
+        if (!isConfirmed(fr)) {
+            log("INFO", "该行未确认注入（不存在注入/扫描中），不生成 sqlmap 命令");
+            return;
+        }
+        try {
+            String cmd = buildSqlmapCommand(fr);
+            if (cmd == null) {
+                log("WARN", "该漏洞缺原始请求证据，无法生成 sqlmap 命令");
+                return;
+            }
+            copy(cmd);
+            log("INFO", "已复制 sqlmap 命令: " + fr.candidate.parameterPath + " @ " + fr.candidate.targetUrl);
+        } catch (Throwable t) {
+            log("WARN", "生成 sqlmap 命令失败: " + t);
+        }
+    }
+
+    private String buildSqlmapCommand(FindingRow fr) {
+        com.xzhscan.model.RawHttp.RawRequest req = fr.candidate.originalRequest;
+        if (req == null) {
+            EvidenceBundles.Bundle b = EvidenceBundles.resolve(fr.candidate, fr.verification, fr.finding, evidence);
+            req = b.originalRequest != null ? b.originalRequest : b.probeRequest;
+        }
+        if (req == null) {
+            return null;
+        }
+        // v3.10.4：不再落临时 request.txt（换机器/换目录后命令即失效）。
+        // 改为自包含 -u/--data/-H 命令，复制到任意环境可直接执行。
+        StringBuilder cmd = new StringBuilder("sqlmap -u \"").append(sqlmapArg(req.url)).append('"');
+        String body = req.body.length > 0 ? req.bodyAsString() : "";
+        if (!body.isEmpty()) {
+            cmd.append(" --data \"").append(sqlmapArg(body)).append('"');
+        }
+        if (!"GET".equalsIgnoreCase(req.method) && (body.isEmpty() || !"POST".equalsIgnoreCase(req.method))) {
+            cmd.append(" --method ").append(req.method);
+        }
+        appendSqlmapHeaders(cmd, req);
+        String param = fr.finding.parameterName != null && !fr.finding.parameterName.isEmpty()
+                ? fr.finding.parameterName : fr.candidate.parameterName;
+        if (param != null && !param.isEmpty()) {
+            cmd.append(" -p \"").append(sqlmapArg(param)).append('"');
+        }
+        cmd.append(" --batch --flush-session --level 3 --risk 2")
+                .append(" --technique ").append(sqlmapTechnique(fr.finding))
+                .append(" --threads 3 --timeout 30 --retries 2")
+                .append(" --time-sec ").append(Math.max(2, config.timeDelaySeconds));
+        String dbms = sqlmapDbms(fr.finding);
+        if (dbms != null) {
+            cmd.append(" --dbms ").append(dbms);
+        }
+        if (req.url.toLowerCase(Locale.ROOT).startsWith("https://")) {
+            cmd.append(" --force-ssl");
+        }
+        return cmd.toString();
+    }
+
+    /** 命令参数转义：去换行 + 双引号转义（cmd/PowerShell/bash 下均按原样传给程序）。 */
+    private static String sqlmapArg(String s) {
+        return s == null ? "" : s.replace("\r", " ").replace("\n", " ")
+                .replace("\"", "\\\"");
+    }
+
+    /**
+     * 自带认证头：只带影响鉴权/内容类型的头，避免把 Host/CL/Accept-Encoding 等
+     * 环境相关头写进命令（换机器后 Host 由 -u 决定）。
+     */
+    private static void appendSqlmapHeaders(StringBuilder cmd, com.xzhscan.model.RawHttp.RawRequest req) {
+        for (String h : req.headers) {
+            int c = h.indexOf(':');
+            if (c <= 0) {
+                continue;
+            }
+            String name = h.substring(0, c).trim();
+            String lower = name.toLowerCase(Locale.ROOT);
+            boolean keep = lower.equals("cookie") || lower.equals("authorization")
+                    || lower.equals("content-type") || lower.equals("referer")
+                    || lower.equals("origin") || lower.equals("user-agent")
+                    || lower.contains("token") || lower.contains("auth")
+                    || lower.contains("session") || lower.contains("sign")
+                    || lower.contains("nonce") || lower.contains("api-key")
+                    || lower.startsWith("x-");
+            if (!keep) {
+                continue;
+            }
+            if (req.body.length == 0 && lower.equals("content-type")) {
+                // 无正文时 Content-Type 对 sqlmap 无意义
+                continue;
+            }
+            cmd.append(" -H \"").append(sqlmapArg(h.trim())).append('"');
+        }
+    }
+
+    /** 注入类型 → sqlmap --technique（E 报错 / B 布尔 / T 时间 / U 联合 / S 堆叠）。 */
+    private static String sqlmapTechnique(InjectionFinding f) {
+        String t = f.injectionType == null ? "" : f.injectionType.toLowerCase(Locale.ROOT);
+        if (t.contains("time")) {
+            return "T";
+        }
+        if (t.contains("error")) {
+            return "E";
+        }
+        if (t.contains("bool")) {
+            return "B";
+        }
+        if (t.contains("union")) {
+            return "U";
+        }
+        if (t.contains("stacked")) {
+            return "S";
+        }
+        return "BEUT";
+    }
+
+    /** DB 族 → sqlmap --dbms；无法识别时不加（让 sqlmap 自判）。 */
+    private static String sqlmapDbms(InjectionFinding f) {
+        String db = f.dbFamily == null ? "" : f.dbFamily.toLowerCase(Locale.ROOT);
+        if (db.contains("mysql") || db.contains("maria")) {
+            return "MySQL";
+        }
+        if (db.contains("mssql") || db.contains("sql server")) {
+            return "MSSQL";
+        }
+        if (db.contains("postgres")) {
+            return "PostgreSQL";
+        }
+        if (db.contains("oracle")) {
+            return "Oracle";
+        }
+        if (db.contains("sqlite")) {
+            return "SQLite";
+        }
+        return null;
     }
 
     private void withSelected(JTable table, java.util.function.Consumer<FindingRow> action) {
@@ -1585,37 +1384,18 @@ public final class SqlScanUi {
             g.fill = GridBagConstraints.HORIZONTAL;
             int row = 0;
 
-            // v3.10.0：SQL 扫描启动/暂停开关（运行时状态，不持久化，默认停止）
-            pauseBtn = new JButton(policy.isPaused() ? "启动扫描" : "暂停扫描");
-            pauseStateLabel = new JLabel(policy.isPaused() ? "状态：已停止" : "状态：运行中");
-            if (policy.isPaused()) {
-                pauseStateLabel.setForeground(java.awt.Color.GRAY);
-            } else {
-                pauseStateLabel.setForeground(new java.awt.Color(0, 150, 0));  // 绿色
-            }
-            pauseBtn.setToolTipText("启动后才会执行 SQL 扫描任务；暂停后停止新的扫描请求");
-            pauseBtn.addActionListener(e -> {
-                if (policy.isPaused()) {
-                    policy.resume();
-                    pauseBtn.setText("暂停扫描");
-                    pauseStateLabel.setText("状态：运行中");
-                    pauseStateLabel.setForeground(new java.awt.Color(0, 150, 0));  // 绿色
-                    log("INFO", "SQL 扫描已启动");
-                } else {
-                    policy.pause();
-                    pauseBtn.setText("启动扫描");
-                    pauseStateLabel.setText("状态：已停止");
-                    pauseStateLabel.setForeground(java.awt.Color.GRAY);
-                    log("INFO", "SQL 扫描已暂停");
-                }
-            });
+            // v4.0.1：扫描总开关（默认停止）。点击「开始扫描」= 应用本页设置 + 启动第一阶段；
+            // 原「应用设置」按钮已删除（用户要求：点扫描即应用）。
+            pauseBtn = new JButton();
+            pauseStateLabel = new JLabel();
+            pauseBtn.setToolTipText("点击开始/暂停被动扫描；开始时会先应用并保存本页设置");
+            updateScanStateUi();
             JPanel pauseBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
             pauseBar.add(pauseBtn);
             pauseBar.add(pauseStateLabel);
             addRow(p, g, row++, pauseBar);
 
-            JCheckBox cPhase1 = new JCheckBox("启用第一阶段（XiaSQL 被动初筛）", config.phase1Enabled);
-            JCheckBox cPhase2 = new JCheckBox("启用第二阶段（SQL 复检引擎，右键人工触发）", config.phase2Enabled);
+            JCheckBox cPhase2 = new JCheckBox("允许第二阶段（右键人工验证，勾选即时生效）", config.phase2Enabled);
             JCheckBox cProxy = new JCheckBox("监控 Proxy 流量", config.watchProxy);
             JCheckBox cRepeater = new JCheckBox("监控 Repeater 流量", config.watchRepeater);
             JCheckBox cScanner = new JCheckBox("监控 Scanner 流量", config.watchScanner);
@@ -1628,6 +1408,14 @@ public final class SqlScanUi {
                 config.watchIntruder = cIntruder.isSelected();
                 log("INFO", "watchIntruder -> " + config.watchIntruder + "（勾选即时生效）");
             });
+            // v4.0.1：第二阶段勾选即时生效（右键「XzhScan SQL 验证」入口随之出现/消失）
+            cPhase2.addActionListener(e -> {
+                config.phase2Enabled = cPhase2.isSelected();
+                for (Runnable l : applyConfigListeners) {
+                    l.run();
+                }
+                log("INFO", "phase2 -> " + config.phase2Enabled + "（勾选即时生效，已保存）");
+            });
             JCheckBox cJsonStrict = new JCheckBox("JSON 严格校验（变异失败禁止发送）", config.jsonStrictValidation);
             JCheckBox cTimeProbe = new JCheckBox("允许时间盲注探针·第二阶段（sleep 复验）", config.allowTimeBasedProbe);
             // v3.9.7：时间盲注延迟秒数（默认 5；2-3 秒会被系统卡顿误判）
@@ -1637,18 +1425,19 @@ public final class SqlScanUi {
             // （时间盲注走右键人工触发的 Phase2 全模块序列，见 cTimeProbe 一项）。
             JCheckBox cDenyWrite = new JCheckBox("写语义接口默认拒绝", config.denyWriteLookingEndpoints);
 
-            SpinnerNumberModel spBaseline = new SpinnerNumberModel(config.baselineSamples, 2, 20, 1);
+            SpinnerNumberModel spBaseline = new SpinnerNumberModel(config.baselineSamples, 2, 6, 1);
             SpinnerNumberModel spThreads = new SpinnerNumberModel(config.maxConcurrentScans, 1, 8, 1);
             SpinnerNumberModel spWeak = new SpinnerNumberModel(config.weakDeltaThreshold, 0, 10, 1);
             SpinnerNumberModel spRate = new SpinnerNumberModel(config.requestIntervalMs, 0, 5000, 50);
             SpinnerNumberModel spTimeout = new SpinnerNumberModel(config.requestTimeoutMs, 2000, 120000, 1000);
+            SpinnerNumberModel spPhase1Budget = new SpinnerNumberModel(
+                    (int) Math.max(30, Math.min(600, config.phase1BudgetMs / 1000)), 30, 600, 30);
             SpinnerNumberModel spScore = new SpinnerNumberModel(config.minDifferenceScore * 100, 5, 100, 1);
             SpinnerNumberModel spDedup = new SpinnerNumberModel(config.dedupWindowMinutes, 0, 1440, 10);
 
             JTextField tfWhite = new JTextField(config.domainWhitelist, 26);
             JTextField tfBlack = new JTextField(config.urlBlacklist, 26);
 
-            addRow(p, g, row++, cPhase1);
             addRow(p, g, row++, cPhase2);
             addRow(p, g, row++, cProxy);
             addRow(p, g, row++, cRepeater);
@@ -1663,14 +1452,14 @@ public final class SqlScanUi {
             addPair(p, g, row++, "差分通过分数（%）：", new JSpinner(spScore));
             addPair(p, g, row++, "请求间隔（ms）：", new JSpinner(spRate));
             addPair(p, g, row++, "请求超时（ms）：", new JSpinner(spTimeout));
+            addPair(p, g, row++, "一阶段单请求预算（秒）：", new JSpinner(spPhase1Budget));
             addPair(p, g, row++, "时间盲注延迟（秒，默认5）：", new JSpinner(spDelay));
             addPair(p, g, row++, "去重窗口（分钟，0=不去重）：", new JSpinner(spDedup));
             addPair(p, g, row++, "域名白名单（逗号分隔，空=全部）：", tfWhite);
             addPair(p, g, row++, "URL 黑名单（逗号分隔）：", tfBlack);
 
-            JButton apply = new JButton("应用设置");
-            apply.addActionListener(e -> {
-                config.phase1Enabled = cPhase1.isSelected();
+            // v4.0.1：单击「开始扫描」= 先应用本页全部设置再启动；无独立「应用设置」按钮。
+            Runnable applySettings = () -> {
                 config.phase2Enabled = cPhase2.isSelected();
                 config.watchProxy = cProxy.isSelected();
                 config.watchRepeater = cRepeater.isSelected();
@@ -1685,37 +1474,43 @@ public final class SqlScanUi {
                 config.minDifferenceScore = spScore.getNumber().intValue() / 100.0;
                 config.requestIntervalMs = spRate.getNumber().intValue();
                 config.requestTimeoutMs = spTimeout.getNumber().intValue();
+                config.phase1BudgetMs = spPhase1Budget.getNumber().intValue() * 1000L;
                 config.timeDelaySeconds = spDelay.getNumber().intValue();
                 config.dedupWindowMinutes = spDedup.getNumber().intValue();
                 config.domainWhitelist = tfWhite.getText().trim();
                 config.urlBlacklist = tfBlack.getText().trim();
+            };
+            pauseBtn.addActionListener(e -> {
+                if (config.phase1Enabled) {
+                    config.phase1Enabled = false;
+                    log("INFO", "扫描已停止（设置已保存）");
+                } else {
+                    applySettings.run();          // 点击扫描 = 应用设置
+                    config.phase1Enabled = true;
+                    policy.resume();
+                    log("INFO", "扫描已启动（设置已应用并保存）: watchProxy=" + config.watchProxy
+                            + ", watchRepeater=" + config.watchRepeater
+                            + ", watchScanner=" + config.watchScanner
+                            + ", watchIntruder=" + config.watchIntruder
+                            + ", phase2=" + config.phase2Enabled);
+                }
                 for (Runnable l : applyConfigListeners) {
-                    l.run();
+                    l.run();                       // 持久化（重载插件后保持）
                 }
-                // v3.9.3：应用成功弹窗（对齐 AuthScan 页先例；含关键开关摘要）
-                try {
-                    javax.swing.JOptionPane.showMessageDialog(apply,
-                            "设置已应用并保存（重载插件不丢失）\n\n"
-                                    + "第一阶段=" + config.phase1Enabled
-                                    + "  第二阶段=" + config.phase2Enabled + "\n"
-                                    + "Proxy=" + config.watchProxy
-                                    + "  Repeater=" + config.watchRepeater
-                                    + "  Scanner=" + config.watchScanner
-                                    + "  Intruder=" + config.watchIntruder + "\n"
-                                    + "线程=" + config.maxConcurrentScans
-                                    + "  请求间隔=" + config.requestIntervalMs + "ms\n"
-                                    + "时间盲注延迟=" + config.timeDelaySeconds + "s"
-                                    + "  去重窗口=" + config.dedupWindowMinutes + " 分钟",
-                            "XzhScan", javax.swing.JOptionPane.INFORMATION_MESSAGE);
-                } catch (Throwable ignored) {
-                    // 无头环境（自动化测试）弹窗失败不影响设置写入
-                }
-                api.logging().logToOutput("[XzhScan] settings applied (phase1=" + config.phase1Enabled
-                        + ", watchProxy=" + config.watchProxy + ", watchRepeater=" + config.watchRepeater
-                        + ", watchScanner=" + config.watchScanner + ", watchIntruder=" + config.watchIntruder + ")");
+                updateScanStateUi();
             });
-            addRow(p, g, row++, apply);
             return new JScrollPane(p);
+        }
+
+        /** 扫描状态：默认关闭；仅「开始扫描」后运行。 */
+        private void updateScanStateUi() {
+            if (pauseBtn == null || pauseStateLabel == null) {
+                return;
+            }
+            boolean running = config.phase1Enabled;
+            pauseBtn.setText(running ? "暂停扫描" : "开始扫描");
+            pauseStateLabel.setText(running ? "状态：运行中" : "状态：已停止");
+            pauseStateLabel.setForeground(running ? new java.awt.Color(0, 150, 0) : java.awt.Color.GRAY);
         }
 
         private void addRow(JPanel p, GridBagConstraints g, int row, JComponent c) {
@@ -1784,9 +1579,6 @@ public final class SqlScanUi {
      * 按请求归组，主表选中某请求时从表只显示该请求的观察。
      */
     public void onGateView(GateProbeView v) {
-        if (v != null && !com.xzhscan.policy.ScanPolicyEngine.isStaticResource(v.url)) {
-            dataBoardUpdate(v); // v3.9.2 数据版聚合（内部自行 edtl）
-        }
         edtl(() -> {
             if (v == null || com.xzhscan.policy.ScanPolicyEngine.isStaticResource(v.url)) {
                 return; // 静态资源永不进差分列表（防御：引擎层正常不会产生）
@@ -1816,12 +1608,11 @@ public final class SqlScanUi {
     }
 
     public void onCandidate(DifferentialCandidate c) {
-        storeCandidate(c); // 差分页行 -> 候选关联（证据查看/候选仓/数据版发送源）
+        storeCandidate(c); // 差分页行 -> 候选关联（证据查看/候选仓）
         if (c.filterDecision == com.xzhscan.model.Models.FilterDecision.INCONCLUSIVE) {
-            // v3.9.2：待定候选（黄色）也回流——数据版聚合，可一键送二阶段
             log("INFO", "候选待定(黄色): " + c.parameterPath + " score="
                     + String.format("%.2f", c.differenceScore) + " " + c.targetUrl
-                    + "（已进数据版，可一键发送二阶段）");
+                    + "（在消息上右键\"XzhScan SQL 验证\"指定该参数复核）");
         } else {
             log("INFO", "候选通过差分门: " + c.parameterPath + " score="
                     + String.format("%.2f", c.differenceScore) + " " + c.targetUrl
@@ -1829,29 +1620,132 @@ public final class SqlScanUi {
         }
     }
 
-    /** 二次验证页签已移除（v1.2）：后台复核保留，结论并入漏洞结果页与日志。 */
-    public void onVerification(VerificationResult v) {
-        log("INFO", "复核 " + v.parameterPath + " @ " + v.url + ": "
-                + (v.verdict == null ? v.state : v.verdict) + " (" + v.elapsedMs + "ms)");
-        // v3.9.2：结论回写数据版行状态（verdict 原样英文，与漏洞页口径一致）
-        if (v.verdict != null) {
-            edtl(() -> {
-                if (dataBoardModel != null) {
-                    dataBoardModel.markVerify(v.requestId, v.parameterPath, v.verdict.name());
-                    dataBoardModel.attachVerification(v); // 点行加载测试请求/响应用
+    /**
+     * v3.10.1 排队状态：发送二阶段时立即在漏洞结果表插入「排队中」行，
+     * 让用户看到任务已入队（不再只有后台日志）。
+     */
+    public void onVerifyQueued(DifferentialCandidate c) {
+        if (c == null) {
+            return;
+        }
+        edtl(() -> {
+            if (findingModel == null) {
+                return;
+            }
+            for (FindingRow row : findingModel.data) {
+                if (row.sameParam(c) && row.statusType != null) {
+                    row.statusType = "排队中";
+                    fireFindingUpdated(findingModel, row);
+                    return;
                 }
-            });
+            }
+            FindingRow row = new FindingRow(null, c, null);
+            row.statusType = "排队中";
+            findingModel.data.add(row);
+            int i = findingModel.data.size() - 1;
+            findingModel.fireTableRowsInserted(i, i);
+        });
+    }
+
+    /** v3.10.1：验证线程真正开始执行 -> 行状态由「排队中」更新为「验证中...」。 */
+    public void onVerifyStarted(DifferentialCandidate c) {
+        if (c == null) {
+            return;
+        }
+        edtl(() -> {
+            if (findingModel == null) {
+                return;
+            }
+            FindingRow match = null;
+            for (FindingRow row : findingModel.data) {
+                if (row.sameParam(c)) {
+                    match = row;
+                    if (row.statusType != null) {
+                        break;
+                    }
+                }
+            }
+            if (match == null) {
+                match = new FindingRow(null, c, null);
+                findingModel.data.add(match);
+                match.statusType = "验证中...";
+                int i = findingModel.data.size() - 1;
+                findingModel.fireTableRowsInserted(i, i);
+                return;
+            }
+            if (match.statusType != null) {
+                match.statusType = "验证中...";
+                fireFindingUpdated(findingModel, match);
+            }
+        });
+    }
+
+    private static void fireFindingUpdated(FindingTableModel model, FindingRow row) {
+        int i = model.data.indexOf(row);
+        if (i >= 0) {
+            model.fireTableRowsUpdated(i, i);
         }
     }
 
-    public void onFinding(DifferentialCandidate c, VerificationResult vr, InjectionFinding f) {
+    /** 二次验证页签已移除（v1.2）：后台复核保留，结论并入漏洞结果页与日志。 */
+    public void onVerification(VerificationResult v) {
+        if (v == null) {
+            return;
+        }
+        log("INFO", "复核 " + v.parameterPath + " @ " + v.url + ": "
+                + (v.verdict == null ? v.state : v.verdict) + " (" + v.elapsedMs + "ms)");
+        if (v.verdict == null) {
+            return;
+        }
+        // v3.10.1：排队行收尾——CONFIRMED → 存在注入，其余 → 不存在注入（中文结论在模型中映射）
         edtl(() -> {
-            findingModel.data.add(new FindingRow(f, c, vr));
-            findingModel.fireTableRowsInserted(findingModel.data.size() - 1, findingModel.data.size() - 1);
+            if (findingModel == null) {
+                return;
+            }
+            for (FindingRow row : findingModel.data) {
+                if (row.candidate != null
+                        && java.util.Objects.equals(row.candidate.requestId, v.requestId)
+                        && java.util.Objects.equals(row.candidate.parameterPath, v.parameterPath)) {
+                    row.verification = v;
+                    row.statusType = null;
+                    fireFindingUpdated(findingModel, row);
+                    return;
+                }
+            }
         });
+    }
+
+    /**
+     * v3.10.1：漏洞结果只入库 CONFIRMED（SUSPECTED/RETAINED/REJECTED/INVALID 仅日志），
+     * 避免误报干扰；发送时插入的排队行由 onVerification 收尾为「不存在注入」。
+     */
+    public void onFinding(DifferentialCandidate c, VerificationResult vr, InjectionFinding f) {
+        if (c == null || f == null) {
+            return;
+        }
         log(f.verdict == VerifyVerdict.CONFIRMED ? "FOUND" : "INFO",
                 f.verdict + " " + f.injectionType + " " + c.targetUrl + " param=" + f.parameterPath
                         + (f.dbFamily != null ? " db=" + f.dbFamily : ""));
+        if (f.verdict != VerifyVerdict.CONFIRMED) {
+            return;
+        }
+        edtl(() -> {
+            if (findingModel == null) {
+                return;
+            }
+            for (FindingRow row : findingModel.data) {
+                if (row.sameParam(c)) {
+                    row.finding = f;
+                    row.verification = vr;
+                    row.statusType = null;
+                    fireFindingUpdated(findingModel, row);
+                    return;
+                }
+            }
+            findingModel.data.add(new FindingRow(f, c, vr));
+            int i = findingModel.data.size() - 1;
+            findingModel.fireTableRowsInserted(i, i);
+        });
     }
 
     /** 后端日志（走 Burp 扩展输出；日志 UI 页已按 v2.1 需求移除，引擎日志能力保留）。 */

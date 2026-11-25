@@ -77,38 +77,7 @@ public final class RawHttp {
         }
 
         public String bodyAsString() {
-            // 修复中文乱码：从 Content-Type 读取 charset
-            String contentType = header("Content-Type");
-            if (contentType != null) {
-                String charset = extractCharset(contentType);
-                if (charset != null) {
-                    try {
-                        return new String(body, charset);
-                    } catch (Exception e) {
-                        // 如果编码不支持，回退到 UTF-8
-                    }
-                }
-            }
-            // 默认 UTF-8
             return new String(body, StandardCharsets.UTF_8);
-        }
-
-        private String extractCharset(String contentType) {
-            String lower = contentType.toLowerCase();
-            int idx = lower.indexOf("charset=");
-            if (idx < 0) return null;
-            // 从原始字符串提取（保持大小写），但索引来自小写版本
-            String charset = contentType.substring(idx + 8).trim();
-            int semicolon = charset.indexOf(';');
-            if (semicolon > 0) {
-                charset = charset.substring(0, semicolon);
-            }
-            int space = charset.indexOf(' ');
-            if (space > 0) {
-                charset = charset.substring(0, space);
-            }
-            charset = charset.replace("\"", "").replace("'", "").trim();
-            return charset.isEmpty() ? null : charset;
         }
 
         public String header(String name) {

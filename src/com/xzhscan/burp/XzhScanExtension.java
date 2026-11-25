@@ -20,7 +20,7 @@ import com.xzhscan.ui.SqlScanUi;
  */
 public final class XzhScanExtension implements BurpExtension {
 
-    public static final String VERSION = "3.9.7";
+    public static final String VERSION = "4.1.0";
 
     private static final String NL = String.valueOf((char) 10);
 
@@ -50,6 +50,9 @@ public final class XzhScanExtension implements BurpExtension {
         final com.xzhscan.auth.AuthScanModule module = new com.xzhscan.auth.AuthScanModule(sharedTransport);
         this.authModule = module;
         listener.setAuthModule(module);
+
+        // v3.10.2：FileScan 页签已移除（保留 filescan 引擎源码备查，不再接线/挂载）
+
         // v3.9.3：UI 启停 AuthScan 即时持久化（未启用=完全不干活、零日志输出）
         module.setOnUserToggle(() -> {
             snapshotModulesToConfig();
@@ -107,6 +110,16 @@ public final class XzhScanExtension implements BurpExtension {
                     }
 
                     @Override
+                    public void onVerifyQueued(com.xzhscan.model.Models.DifferentialCandidate c) {
+                        ui.onVerifyQueued(c);
+                    }
+
+                    @Override
+                    public void onVerifyStarted(com.xzhscan.model.Models.DifferentialCandidate c) {
+                        ui.onVerifyStarted(c);
+                    }
+
+                    @Override
                     public void onFinding(com.xzhscan.model.Models.DifferentialCandidate c,
                                           com.xzhscan.model.Models.VerificationResult vr,
                                           com.xzhscan.model.Models.InjectionFinding f) {
@@ -118,7 +131,7 @@ public final class XzhScanExtension implements BurpExtension {
                     }
                 };
                 listener.setHostCallback(hostCb);
-                // v3.9.2 数据版：注入引擎引用（一键送二阶段 = verifyNow 同款链路）
+                // 注入二阶段引擎引用（右键 verifyNow 同款链路）
                 ui.setScanEngine(orchestrator, hostCb);
                 // v3.9.3 修复：应用设置立即持久化（此前只改内存，扩展重载后回滚——
                 // watchIntruder 等开关"勾了又丢"的根因）
@@ -169,6 +182,9 @@ public final class XzhScanExtension implements BurpExtension {
                         + com.xzhscan.config.ConfigCodec.MIGRATION_NOTES);
             }
         }
+        // v4.0.1：被动扫描不随插件加载自启动——每次启动都从「已停止」开始，
+        // 必须由用户点击「开始扫描」；会话中启动后卸载保存的值不作为下次自启动依据。
+        c.phase1Enabled = false;
         return c;
     }
 

@@ -59,6 +59,14 @@ public final class ScanOrchestrator {
         void onVerification(VerificationResult result);
 
         void onFinding(DifferentialCandidate candidate, VerificationResult result, com.xzhscan.model.Models.InjectionFinding finding);
+
+        /** v3.10.1：手动验证入队（UI 立即显示「排队中」；默认空实现保持兼容）。 */
+        default void onVerifyQueued(DifferentialCandidate candidate) {
+        }
+
+        /** v3.10.1：验证线程开始执行（UI 行状态「排队中」→「验证中...」）。 */
+        default void onVerifyStarted(DifferentialCandidate candidate) {
+        }
     }
 
     public ScanOrchestrator(XzhScanConfig config, Transport transport, EvidenceStore evidence, ScanPolicyEngine policy) {
@@ -100,6 +108,14 @@ public final class ScanOrchestrator {
         record.url = request.url;
         record.method = request.method;
         record.startedAtMs = System.currentTimeMillis();
+        // v4.0.1：第一阶段总开关关闭时，所有入口（自动/手动 sqltest）一律不扫描
+        if (!config.phase1Enabled) {
+            record.phase1Status = "disabled";
+            record.phase2Status = "-";
+            record.elapsedMs = 0;
+            cb.onTraffic(record);
+            return;
+        }
         if (!decision.allowed) {
             record.phase1Status = "blocked-by-policy";
             record.phase2Status = "-";
@@ -230,9 +246,15 @@ public final class ScanOrchestrator {
         if (candidate == null || cb == null) {
             return;
         }
+        // v4.0.1：第二阶段总开关关闭时不执行人工验证（右键入口同时隐藏）
+        if (!config.phase2Enabled) {
+            return;
+        }
         try {
+            cb.onVerifyQueued(candidate);
             executor.submit(() -> {
                 try {
+                    cb.onVerifyStarted(candidate);
                     ScanPolicyEngine.Decision d = policy.check(candidate.originalRequest);
                     if (!d.allowed) {
                         cb.onVerification(manualResult(candidate, com.xzhscan.model.Models.VerifyVerdict.INVALID,

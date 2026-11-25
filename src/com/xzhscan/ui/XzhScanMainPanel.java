@@ -13,7 +13,7 @@ import javax.swing.*;
  *   XzhScan
  *   ├── SQLScan    （SqlScanUi：漏洞结果/差分候选/设置）
  *   ├── AuthScan   （越权检测：迁移自 gatherBurp Perm）
- *   ├── Dictionary （DictionaryUi：SQL库名注入/sqlmap命令/XSS/路径/信息生成/字典生成）
+ *   ├── Dictionary （DictionaryUi：XSS/路径/信息生成/字典生成）
  *   └── 关于       （版本/开发者信息）
  *
  * 各模块结果/队列/启停状态完全隔离；主面板只做容器与主题适配。
@@ -39,7 +39,7 @@ public final class XzhScanMainPanel {
         sqlScanUi = new SqlScanUi(api, config, evidence, policy);
         root.addTab("SQLScan", sqlScanUi.build());
         root.addTab("AuthScan", placeholder("AuthScan 模块初始化中…"));
-        root.addTab("Dictionary", new DictionaryUi(config).build());
+        root.addTab("Dictionary", new DictionaryUi().build());
         root.addTab("关于", aboutPanel());
         applyTheme(root);
         return root;
@@ -54,10 +54,12 @@ public final class XzhScanMainPanel {
 
                 Burp Suite 扩展：SQL 注入两阶段检测（受控差分初筛 + 证据分型复核）与越权检测。
 
+                GitHub：https://github.com/Xzhgood/XzhScan/
+
                 开发者：Xzh
                 QQ：1421946905
 
-                问题反馈请附 Burp Output 中 [XzhScan] 开头的日志行。
+                问题反馈请附 github issues
                 """.formatted(com.xzhscan.burp.XzhScanExtension.VERSION));
         JPanel p = new JPanel(new java.awt.BorderLayout());
         p.add(new JScrollPane(text), java.awt.BorderLayout.CENTER);

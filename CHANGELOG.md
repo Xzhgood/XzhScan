@@ -2,6 +2,41 @@
 
 All notable changes to XzhScan will be documented in this file.
 
+## [4.1.0] - 2025-11-26
+
+### Added
+
+- **复制 sqlmap 命令**：漏洞结果页仅 CONFIRMED 行提供，自动生成自包含
+  `-u/--data/-H` 命令（含 Cookie/Authorization/Content-Type 等认证头），
+  不落地临时 request 文件，可复制到其他机器直接执行。
+- **排队状态**：发送二阶段立即显示「排队中」→「扫描中/验证中...」→
+  「存在注入/不存在注入」，类型列同步收尾。
+- **一阶段混合型引号探针**：新增 `1'1` / `1"1`（DetSQL 对标）。
+- **49 条细粒度报错正则**：新增 `SQL扩展` 族（含中文、西班牙语、达梦等）。
+- **一阶段防卡死**：单请求总预算（默认 180s，可设置）、基线采样失败快速终止、
+  连续 3 次传输失败熔断、线程中断响应。
+- **越权组合结论**：存在越权 OR 存在未授权 / 不存在越权 OR 存在未授权 / 存在越权；
+  `鉴权正常` 不显示。
+- **AuthScan 配置完整性指示**：设置页实时显示身份配置是否完整；启用前不完整会弹窗提醒。
+
+### Changed
+
+- **SQL 扫描默认停止**：插件加载/重启后不自启动，必须点击「开始扫描」；
+  点击时一并应用并保存设置，原「应用设置」按钮已删除。
+- **第二阶段开关**：勾选即时生效，控制右键「XzhScan SQL 验证」入口。
+- **漏洞结果只入库 CONFIRMED**：SUSPECTED/RETAINED 仅记录日志。
+- **SUSPECTED/RETAINED 不再阻断后续 payload/模块**：仅 CONFIRMED 短路。
+- **差分候选取消绿色染色**：只保留红/黄两色。
+- **移除页签**：删除「数据版」「FileScan」；Dictionary 删除「SQL库名注入」「sqlmap命令」。
+- 关于页：新增 GitHub 地址，反馈改为 GitHub Issues。
+
+### Fixed
+
+- AuthScan 模块默认 `enabled=true` 与配置 `authEnabled=false` 不一致。
+- 漏洞结果类型列扫描结束后停留在「验证中...」。
+- `loadFinding` 证据解析阻塞 EDT；Dispatcher 持锁执行回调；多处空指针风险。
+- AuthScan 线程池卸载改为优雅关闭（5s 超时后强杀）。
+
 ## [3.9.7] - 2024-11-24
 
 ### Fixed
