@@ -2,7 +2,7 @@
 
 All notable changes to XzhScan will be documented in this file.
 
-## [4.1.0] - 2025-11-26
+## [4.3.0] - 2026-11-26
 
 ### Added
 

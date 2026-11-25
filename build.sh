@@ -18,7 +18,7 @@ echo "com.xzhscan.burp.XzhScanExtension" > build/jar-meta/META-INF/services/burp
 cat > build/jar-meta/MANIFEST.MF <<'EOF'
 Manifest-Version: 1.0
 Implementation-Title: XzhScan
-Implementation-Version: 4.1.0
+Implementation-Version: 4.3.0
 EOF
 jar cfm build/XzhScan.jar build/jar-meta/MANIFEST.MF -C build/classes . -C build/jar-meta META-INF/services
 echo "   classes in jar: $(unzip -l build/XzhScan.jar | grep -c "\.class$")"
